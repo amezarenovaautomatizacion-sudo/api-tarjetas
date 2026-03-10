@@ -61,7 +61,25 @@ const authorizeRole = (rolesPermitidos) => {
   };
 };
 
+// Middleware para verificar que sea cliente (rolid 4)
+const authorizeCliente = (req, res, next) => {
+  if (!req.user) {
+    return res.status(401).json({
+      error: "No autenticado"
+    });
+  }
+
+  if (req.user.rolid !== 4) {
+    return res.status(403).json({
+      error: "Esta ruta es exclusiva para clientes"
+    });
+  }
+
+  next();
+};
+
 module.exports = {
   authenticateToken,
-  authorizeRole
+  authorizeRole,
+  authorizeCliente
 };

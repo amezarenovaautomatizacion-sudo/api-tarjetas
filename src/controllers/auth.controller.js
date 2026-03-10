@@ -5,9 +5,29 @@ const crypto = require("crypto");
 const { sendPasswordResetEmail } = require("../utils/email.utils");
 const { getMexicoISO } = require("../utils/date.utils");
 
+// Helper para determinar qué tabla usar
+const getTablasByTipo = (tipo) => {
+  if (tipo === 'cliente') {
+    return {
+      usuarios: 'usuarios_clientes',
+      tokens: 'password_reset_tokens_clientes',
+      blacklist: 'tokens_blacklist_clientes',
+      rolid: 4
+    };
+  }
+  return {
+    usuarios: 'usuarios',
+    tokens: 'password_reset_tokens',
+    blacklist: 'tokens_blacklist',
+    rolid: null // Se usará el rol de la tabla roles
+  };
+};
+
+// LOGIN (soporta admin y cliente)
 exports.login = async (req, res) => {
   try {
-    const { email, password, ip_ultimo_login } = req.body;
+    const { email, password, ip_ultimo_login, tipo = 'admin' } = req.body;
+    const tablas = getTablasByTipo(tipo);
 
     if (!email || !password) {
       return res.status(400).json({
@@ -16,7 +36,7 @@ exports.login = async (req, res) => {
     }
 
     const [rows] = await db.execute(
-      "SELECT * FROM usuarios WHERE email = ? AND activo = 1 LIMIT 1",
+      `SELECT * FROM ${tablas.usuarios} WHERE email = ? AND activo = 1 LIMIT 1`,
       [email]
     );
 
@@ -39,7 +59,7 @@ exports.login = async (req, res) => {
     const ultimo_login = getMexicoISO();
 
     await db.execute(
-      `UPDATE usuarios 
+      `UPDATE ${tablas.usuarios} 
        SET ultimo_login = ?, ip_ultimo_login = ?
        WHERE usuarioid = ?`,
       [ultimo_login, ip_ultimo_login, user.usuarioid]
@@ -49,7 +69,8 @@ exports.login = async (req, res) => {
       {
         usuarioid: user.usuarioid,
         email: user.email,
-        rolid: user.rolid
+        rolid: user.rolid,
+        tipo: tipo
       },
       process.env.JWT_SECRET,
       {
@@ -59,24 +80,149 @@ exports.login = async (req, res) => {
 
     delete user.password;
 
+    // Si es cliente, obtener información adicional
+    let infoAdicional = {};
+    if (tipo === 'cliente') {
+      const [clienteInfo] = await db.execute(
+        "SELECT * FROM clientes WHERE usuarioid = ?",
+        [user.usuarioid]
+      );
+      if (clienteInfo.length > 0) {
+        infoAdicional = clienteInfo[0];
+      }
+    }
+
     return res.json({
       token,
       usuario: {
         ...user,
         ultimo_login,
-        ip_ultimo_login
-      }
+        ip_ultimo_login,
+        tipo
+      },
+      ...(tipo === 'cliente' && { cliente: infoAdicional })
     });
 
   } catch (error) {
     console.error(error);
-
     return res.status(500).json({
       error: "Error en login"
     });
   }
 };
 
+// REGISTER para clientes (con información adicional)
+exports.registerCliente = async (req, res) => {
+  try {
+    const { 
+      nombre, email, password, ip_registro,
+      telefono, telefono_alternativo, fecha_nacimiento, genero,
+      calle, numero_exterior, numero_interior, colonia,
+      ciudad, estado, pais, codigo_postal, referencias,
+      razon_social, rfc, regimen_fiscal, cfdi_uso, email_facturacion,
+      notas
+    } = req.body;
+
+    if (!nombre || !email || !password) {
+      return res.status(400).json({
+        error: "Nombre, email y password son requeridos"
+      });
+    }
+
+    // Verificar si el email ya existe en cualquiera de las dos tablas
+    const [existingAdmin] = await db.execute(
+      "SELECT usuarioid FROM usuarios WHERE email = ? LIMIT 1",
+      [email]
+    );
+    const [existingCliente] = await db.execute(
+      "SELECT usuarioid FROM usuarios_clientes WHERE email = ? LIMIT 1",
+      [email]
+    );
+
+    if (existingAdmin.length > 0 || existingCliente.length > 0) {
+      return res.status(400).json({
+        error: "El email ya está registrado"
+      });
+    }
+
+    // Validar password (mínimo 6 caracteres)
+    if (password.length < 6) {
+      return res.status(400).json({
+        error: "La contraseña debe tener al menos 6 caracteres"
+      });
+    }
+
+    // Encriptar password
+    const saltRounds = 10;
+    const hashedPassword = await bcrypt.hash(password, saltRounds);
+
+    const fecha_creacion = getMexicoISO();
+
+    // Insertar nuevo usuario cliente (rolid 4)
+    const [result] = await db.execute(
+      `INSERT INTO usuarios_clientes 
+       (nombre, email, password, rolid, activo, creado, ip_ultimo_login) 
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      [nombre, email, hashedPassword, 4, 1, fecha_creacion, ip_registro || null]
+    );
+
+    const usuarioid = result.insertId;
+
+    // Insertar información detallada del cliente
+    await db.execute(
+      `INSERT INTO clientes 
+       (usuarioid, telefono, telefono_alternativo, fecha_nacimiento, genero,
+        calle, numero_exterior, numero_interior, colonia, ciudad, estado, pais,
+        codigo_postal, referencias, razon_social, rfc, regimen_fiscal, cfdi_uso,
+        email_facturacion, notas)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        usuarioid, telefono || null, telefono_alternativo || null, 
+        fecha_nacimiento || null, genero || null,
+        calle || null, numero_exterior || null, numero_interior || null,
+        colonia || null, ciudad || null, estado || null, pais || 'México',
+        codigo_postal || null, referencias || null, razon_social || null,
+        rfc || null, regimen_fiscal || null, cfdi_uso || null,
+        email_facturacion || null, notas || null
+      ]
+    );
+
+    const token = jwt.sign(
+      {
+        usuarioid: usuarioid,
+        email: email,
+        rolid: 4,
+        tipo: 'cliente'
+      },
+      process.env.JWT_SECRET,
+      {
+        expiresIn: process.env.JWT_EXPIRES_IN
+      }
+    );
+
+    return res.status(201).json({
+      message: "Cliente registrado exitosamente",
+      token,
+      usuario: {
+        usuarioid,
+        nombre,
+        email,
+        rolid: 4,
+        activo: 1,
+        creado: fecha_creacion,
+        tipo: 'cliente'
+      }
+    });
+
+  } catch (error) {
+    console.error(error);
+    return res.status(500).json({
+      error: "Error en el registro de cliente"
+    });
+  }
+};
+
+// REGISTER para admin (original)
 exports.register = async (req, res) => {
   try {
     const { nombre, email, password, ip_registro } = req.body;
@@ -87,13 +233,17 @@ exports.register = async (req, res) => {
       });
     }
 
-    // Verificar si el email ya existe
-    const [existingUser] = await db.execute(
+    // Verificar si el email ya existe en cualquiera de las dos tablas
+    const [existingAdmin] = await db.execute(
       "SELECT usuarioid FROM usuarios WHERE email = ? LIMIT 1",
       [email]
     );
+    const [existingCliente] = await db.execute(
+      "SELECT usuarioid FROM usuarios_clientes WHERE email = ? LIMIT 1",
+      [email]
+    );
 
-    if (existingUser.length > 0) {
+    if (existingAdmin.length > 0 || existingCliente.length > 0) {
       return res.status(400).json({
         error: "El email ya está registrado"
       });
@@ -124,7 +274,8 @@ exports.register = async (req, res) => {
       {
         usuarioid: result.insertId,
         email: email,
-        rolid: 3
+        rolid: 3,
+        tipo: 'admin'
       },
       process.env.JWT_SECRET,
       {
@@ -141,23 +292,26 @@ exports.register = async (req, res) => {
         email,
         rolid: 3,
         activo: 1,
-        creado: fecha_creacion
+        creado: fecha_creacion,
+        tipo: 'admin'
       }
     });
 
   } catch (error) {
     console.error(error);
-
     return res.status(500).json({
       error: "Error en el registro de usuario"
     });
   }
 };
 
+// LOGOUT (soporta ambos tipos)
 exports.logout = async (req, res) => {
   try {
     const authHeader = req.headers["authorization"];
     const token = authHeader && authHeader.split(" ")[1];
+    const tipo = req.user?.tipo || 'admin';
+    const tablas = getTablasByTipo(tipo);
 
     if (!token) {
       return res.status(400).json({
@@ -165,7 +319,6 @@ exports.logout = async (req, res) => {
       });
     }
 
-    // Decodificar el token para obtener fecha de expiración
     const decoded = jwt.decode(token);
     
     if (decoded && decoded.exp) {
@@ -174,9 +327,8 @@ exports.logout = async (req, res) => {
         .slice(0, 19)
         .replace("T", " ");
 
-      // Guardar token en blacklist
       await db.execute(
-        "INSERT INTO tokens_blacklist (token, fecha_expiracion) VALUES (?, ?)",
+        `INSERT INTO ${tablas.blacklist} (token, fecha_expiracion) VALUES (?, ?)`,
         [token, fecha_expiracion]
       );
     }
@@ -193,19 +345,35 @@ exports.logout = async (req, res) => {
   }
 };
 
+// GET PROFILE (soporta ambos tipos)
 exports.getProfile = async (req, res) => {
   try {
     const usuarioid = req.user.usuarioid;
+    const tipo = req.user.tipo;
+    const tablas = getTablasByTipo(tipo);
 
-    const [rows] = await db.execute(
-      `SELECT u.usuarioid, u.nombre, u.email, u.activo, u.creado, 
-              u.ultimo_login, u.ip_ultimo_login, u.rolid,
-              r.nombre as rol_nombre
-       FROM usuarios u
-       LEFT JOIN roles r ON u.rolid = r.rolid
-       WHERE u.usuarioid = ? AND u.activo = 1`,
-      [usuarioid]
-    );
+    let query;
+    if (tipo === 'cliente') {
+      query = `
+        SELECT u.usuarioid, u.nombre, u.email, u.activo, u.creado, 
+               u.ultimo_login, u.ip_ultimo_login, u.rolid,
+               c.*
+        FROM ${tablas.usuarios} u
+        LEFT JOIN clientes c ON u.usuarioid = c.usuarioid
+        WHERE u.usuarioid = ? AND u.activo = 1
+      `;
+    } else {
+      query = `
+        SELECT u.usuarioid, u.nombre, u.email, u.activo, u.creado, 
+               u.ultimo_login, u.ip_ultimo_login, u.rolid,
+               r.nombre as rol_nombre
+        FROM ${tablas.usuarios} u
+        LEFT JOIN roles r ON u.rolid = r.rolid
+        WHERE u.usuarioid = ? AND u.activo = 1
+      `;
+    }
+
+    const [rows] = await db.execute(query, [usuarioid]);
 
     if (rows.length === 0) {
       return res.status(404).json({
@@ -213,10 +381,9 @@ exports.getProfile = async (req, res) => {
       });
     }
 
-    const user = rows[0];
-
     return res.json({
-      usuario: user
+      usuario: rows[0],
+      tipo
     });
 
   } catch (error) {
@@ -227,10 +394,57 @@ exports.getProfile = async (req, res) => {
   }
 };
 
+// UPDATE CLIENTE PROFILE (solo para clientes)
+exports.updateClienteProfile = async (req, res) => {
+  try {
+    const usuarioid = req.user.usuarioid;
+    const {
+      telefono, telefono_alternativo, fecha_nacimiento, genero,
+      calle, numero_exterior, numero_interior, colonia,
+      ciudad, estado, pais, codigo_postal, referencias,
+      razon_social, rfc, regimen_fiscal, cfdi_uso, email_facturacion,
+      notas
+    } = req.body;
+
+    // Actualizar información del cliente
+    await db.execute(
+      `UPDATE clientes 
+       SET telefono = ?, telefono_alternativo = ?, fecha_nacimiento = ?, genero = ?,
+           calle = ?, numero_exterior = ?, numero_interior = ?, colonia = ?,
+           ciudad = ?, estado = ?, pais = ?, codigo_postal = ?, referencias = ?,
+           razon_social = ?, rfc = ?, regimen_fiscal = ?, cfdi_uso = ?,
+           email_facturacion = ?, notas = ?
+       WHERE usuarioid = ?`,
+      [
+        telefono || null, telefono_alternativo || null, 
+        fecha_nacimiento || null, genero || null,
+        calle || null, numero_exterior || null, numero_interior || null,
+        colonia || null, ciudad || null, estado || null, pais || 'México',
+        codigo_postal || null, referencias || null, razon_social || null,
+        rfc || null, regimen_fiscal || null, cfdi_uso || null,
+        email_facturacion || null, notas || null, usuarioid
+      ]
+    );
+
+    return res.json({
+      message: "Perfil de cliente actualizado exitosamente"
+    });
+
+  } catch (error) {
+    console.error(error);
+    return res.status(500).json({
+      error: "Error al actualizar perfil de cliente"
+    });
+  }
+};
+
+// CHANGE PASSWORD (soporta ambos tipos)
 exports.changePassword = async (req, res) => {
   try {
     const { password_actual, password_nuevo } = req.body;
     const usuarioid = req.user.usuarioid;
+    const tipo = req.user.tipo;
+    const tablas = getTablasByTipo(tipo);
 
     if (!password_actual || !password_nuevo) {
       return res.status(400).json({
@@ -244,9 +458,8 @@ exports.changePassword = async (req, res) => {
       });
     }
 
-    // Obtener usuario actual
     const [rows] = await db.execute(
-      "SELECT password FROM usuarios WHERE usuarioid = ? AND activo = 1",
+      `SELECT password FROM ${tablas.usuarios} WHERE usuarioid = ? AND activo = 1`,
       [usuarioid]
     );
 
@@ -258,7 +471,6 @@ exports.changePassword = async (req, res) => {
 
     const user = rows[0];
 
-    // Verificar contraseña actual
     const passwordMatch = await bcrypt.compare(password_actual, user.password);
 
     if (!passwordMatch) {
@@ -267,13 +479,11 @@ exports.changePassword = async (req, res) => {
       });
     }
 
-    // Encriptar nueva contraseña
     const saltRounds = 10;
     const hashedPassword = await bcrypt.hash(password_nuevo, saltRounds);
 
-    // Actualizar contraseña
     await db.execute(
-      "UPDATE usuarios SET password = ? WHERE usuarioid = ?",
+      `UPDATE ${tablas.usuarios} SET password = ? WHERE usuarioid = ?`,
       [hashedPassword, usuarioid]
     );
 
@@ -289,9 +499,11 @@ exports.changePassword = async (req, res) => {
   }
 };
 
+// FORGOT PASSWORD (soporta ambos tipos)
 exports.forgotPassword = async (req, res) => {
   try {
-    const { email } = req.body;
+    const { email, tipo = 'admin' } = req.body;
+    const tablas = getTablasByTipo(tipo);
 
     if (!email) {
       return res.status(400).json({
@@ -299,14 +511,12 @@ exports.forgotPassword = async (req, res) => {
       });
     }
 
-    // Buscar usuario
     const [users] = await db.execute(
-      "SELECT usuarioid, nombre, email FROM usuarios WHERE email = ? AND activo = 1",
+      `SELECT usuarioid, nombre, email FROM ${tablas.usuarios} WHERE email = ? AND activo = 1`,
       [email]
     );
 
     if (users.length === 0) {
-      // Por seguridad, no revelar si el email existe o no
       return res.json({
         message: "Si el email existe, recibirás instrucciones para recuperar tu contraseña"
       });
@@ -314,27 +524,36 @@ exports.forgotPassword = async (req, res) => {
 
     const user = users[0];
 
-    // Generar token único
     const resetToken = crypto.randomBytes(32).toString("hex");
     
-    // Calcular expiración (1 hora)
     const expiracion = new Date();
     expiracion.setHours(expiracion.getHours() + 1);
     const expiracionStr = expiracion.toISOString().slice(0, 19).replace("T", " ");
 
-    // Guardar token en BD
+    // Crear tabla de tokens si no existe
+    await db.execute(`
+      CREATE TABLE IF NOT EXISTS ${tablas.tokens} (
+        id int NOT NULL AUTO_INCREMENT,
+        usuarioid int NOT NULL,
+        token varchar(255) NOT NULL,
+        expiracion timestamp NOT NULL,
+        usado tinyint(1) DEFAULT '0',
+        creado timestamp NULL DEFAULT CURRENT_TIMESTAMP,
+        PRIMARY KEY (id),
+        UNIQUE KEY token_unique (token),
+        KEY usuarioid (usuarioid)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    `);
+
     await db.execute(
-      `INSERT INTO password_reset_tokens (usuarioid, token, expiracion) 
-       VALUES (?, ?, ?)`,
+      `INSERT INTO ${tablas.tokens} (usuarioid, token, expiracion) VALUES (?, ?, ?)`,
       [user.usuarioid, resetToken, expiracionStr]
     );
 
-    // Enviar email
     try {
-      await sendPasswordResetEmail(user.email, user.nombre, resetToken);
+      await sendPasswordResetEmail(user.email, user.nombre, resetToken, tipo);
     } catch (emailError) {
       console.error("Error al enviar email:", emailError);
-      // No fallar la petición si el email no se envía
     }
 
     return res.json({
@@ -349,9 +568,11 @@ exports.forgotPassword = async (req, res) => {
   }
 };
 
+// RESET PASSWORD (soporta ambos tipos)
 exports.resetPassword = async (req, res) => {
   try {
-    const { token, new_password } = req.body;
+    const { token, new_password, tipo = 'admin' } = req.body;
+    const tablas = getTablasByTipo(tipo);
 
     if (!token || !new_password) {
       return res.status(400).json({
@@ -365,9 +586,8 @@ exports.resetPassword = async (req, res) => {
       });
     }
 
-    // Buscar token válido
     const [tokens] = await db.execute(
-      `SELECT * FROM password_reset_tokens 
+      `SELECT * FROM ${tablas.tokens} 
        WHERE token = ? AND usado = 0 AND expiracion > NOW() 
        LIMIT 1`,
       [token]
@@ -381,25 +601,21 @@ exports.resetPassword = async (req, res) => {
 
     const resetToken = tokens[0];
 
-    // Encriptar nueva contraseña
     const saltRounds = 10;
     const hashedPassword = await bcrypt.hash(new_password, saltRounds);
 
-    // Actualizar contraseña
     await db.execute(
-      "UPDATE usuarios SET password = ? WHERE usuarioid = ?",
+      `UPDATE ${tablas.usuarios} SET password = ? WHERE usuarioid = ?`,
       [hashedPassword, resetToken.usuarioid]
     );
 
-    // Marcar token como usado
     await db.execute(
-      "UPDATE password_reset_tokens SET usado = 1 WHERE id = ?",
+      `UPDATE ${tablas.tokens} SET usado = 1 WHERE id = ?`,
       [resetToken.id]
     );
 
-    // Invalidar todos los tokens anteriores del usuario (opcional)
     await db.execute(
-      "UPDATE password_reset_tokens SET usado = 1 WHERE usuarioid = ? AND id != ?",
+      `UPDATE ${tablas.tokens} SET usado = 1 WHERE usuarioid = ? AND id != ?`,
       [resetToken.usuarioid, resetToken.id]
     );
 
