@@ -703,7 +703,7 @@ app.get("/docs", (req, res) => {
       
       <div class="footer">
           <p>Tarjetas Renova API v1.0.0 | Documentación para desarrolladores</p>
-          <p style="margin-top: 0.5rem; font-size: 0.8rem;">© 2024 Tarjetas Renova. Todos los derechos reservados.</p>
+          <p style="margin-top: 0.5rem; font-size: 0.8rem;">© 2026 Tarjetas Renova. Todos los derechos reservados.</p>
       </div>
       
       <script>
