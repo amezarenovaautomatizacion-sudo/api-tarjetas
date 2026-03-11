@@ -13,13 +13,15 @@ const corsOptions = {
     // Permitir solicitudes sin origen (como apps móviles o Postman)
     if (!origin) return callback(null, true);
     
-    // Lista de orígenes permitidos (puedes agregar más)
+    // Lista de orígenes permitidos
     const allowedOrigins = [
       'http://localhost:3000',
       'http://localhost:3001',
       'http://localhost:5173', // Vite default
       'http://127.0.0.1:5173',
       'http://localhost:8080',
+      'https://api-tarjetas.vercel.app', // Tu dominio en Vercel
+      'https://tu-frontend.vercel.app', // Agrega aquí tu frontend en producción
       process.env.FRONTEND_URL
     ].filter(Boolean); // Filtrar undefined
     
@@ -37,6 +39,9 @@ const corsOptions = {
 
 // Aplicar CORS a todas las rutas
 app.use(cors(corsOptions));
+
+// Manejar preflight requests explícitamente
+app.options('*', cors(corsOptions));
 
 app.use(express.json());
 
