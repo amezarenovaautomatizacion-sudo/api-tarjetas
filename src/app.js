@@ -20,10 +20,9 @@ const corsOptions = {
       'http://localhost:5173', // Vite default
       'http://127.0.0.1:5173',
       'http://localhost:8080',
-      'https://api-tarjetas.vercel.app', // Tu dominio en Vercel
-      'https://tu-frontend.vercel.app', // Agrega aquí tu frontend en producción
+      'https://api-tarjetas.vercel.app',
       process.env.FRONTEND_URL
-    ].filter(Boolean); // Filtrar undefined
+    ].filter(Boolean);
     
     if (allowedOrigins.indexOf(origin) !== -1 || process.env.NODE_ENV === 'development') {
       callback(null, true);
@@ -37,11 +36,10 @@ const corsOptions = {
   optionsSuccessStatus: 200
 };
 
-// Aplicar CORS a todas las rutas
+// Aplicar CORS a todas las rutas - ESTO ES SUFICIENTE
 app.use(cors(corsOptions));
 
-// Manejar preflight requests explícitamente
-app.options('*', cors(corsOptions));
+// NO USES app.options('*', cors(corsOptions)) - esto causa el error en Express 5
 
 app.use(express.json());
 
@@ -54,6 +52,7 @@ function escapeHtml(text) {
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&#039;");
 }
+
 
 app.get("/", (req, res) => {
   const baseUrl = `${req.protocol}://${req.get("host")}`;
