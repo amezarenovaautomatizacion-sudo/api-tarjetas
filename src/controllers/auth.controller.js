@@ -2,10 +2,9 @@ const db = require("../config/db");
 const bcrypt = require("bcrypt");
 const jwt = require("jsonwebtoken");
 const crypto = require("crypto");
-const { sendPasswordResetEmail } = require("../utils/email.utils");
+const { sendWelcomeEmail, sendLoginNotificationEmail, sendPasswordResetEmail } = require("../utils/email.utils");
 const { getMexicoISO } = require("../utils/date.utils");
 
-// Helper para determinar qué tabla usar
 const getTablasByTipo = (tipo) => {
   if (tipo === 'cliente') {
     return {
@@ -19,11 +18,10 @@ const getTablasByTipo = (tipo) => {
     usuarios: 'usuarios',
     tokens: 'password_reset_tokens',
     blacklist: 'tokens_blacklist',
-    rolid: null // Se usará el rol de la tabla roles
+    rolid: null
   };
 };
 
-// LOGIN (soporta admin y cliente)
 exports.login = async (req, res) => {
   try {
     const { email, password, ip_ultimo_login, tipo = 'admin' } = req.body;
@@ -80,7 +78,6 @@ exports.login = async (req, res) => {
 
     delete user.password;
 
-    // Si es cliente, obtener información adicional
     let infoAdicional = {};
     if (tipo === 'cliente') {
       const [clienteInfo] = await db.execute(
@@ -90,6 +87,12 @@ exports.login = async (req, res) => {
       if (clienteInfo.length > 0) {
         infoAdicional = clienteInfo[0];
       }
+    }
+
+    try {
+      await sendLoginNotificationEmail(user.email, user.nombre, ip_ultimo_login, tipo);
+    } catch (emailError) {
+      console.error("Error al enviar notificación de login:", emailError);
     }
 
     return res.json({
@@ -111,7 +114,6 @@ exports.login = async (req, res) => {
   }
 };
 
-// REGISTER para clientes (con información adicional)
 exports.registerCliente = async (req, res) => {
   try {
     const { 
@@ -129,7 +131,6 @@ exports.registerCliente = async (req, res) => {
       });
     }
 
-    // Verificar si el email ya existe en cualquiera de las dos tablas
     const [existingAdmin] = await db.execute(
       "SELECT usuarioid FROM usuarios WHERE email = ? LIMIT 1",
       [email]
@@ -145,20 +146,17 @@ exports.registerCliente = async (req, res) => {
       });
     }
 
-    // Validar password (mínimo 6 caracteres)
     if (password.length < 6) {
       return res.status(400).json({
         error: "La contraseña debe tener al menos 6 caracteres"
       });
     }
 
-    // Encriptar password
     const saltRounds = 10;
     const hashedPassword = await bcrypt.hash(password, saltRounds);
 
     const fecha_creacion = getMexicoISO();
 
-    // Insertar nuevo usuario cliente (rolid 4)
     const [result] = await db.execute(
       `INSERT INTO usuarios_clientes 
        (nombre, email, password, rolid, activo, creado, ip_ultimo_login) 
@@ -168,7 +166,6 @@ exports.registerCliente = async (req, res) => {
 
     const usuarioid = result.insertId;
 
-    // Insertar información detallada del cliente
     await db.execute(
       `INSERT INTO clientes 
        (usuarioid, telefono, telefono_alternativo, fecha_nacimiento, genero,
@@ -200,6 +197,12 @@ exports.registerCliente = async (req, res) => {
       }
     );
 
+    try {
+      await sendWelcomeEmail(email, nombre, 'cliente');
+    } catch (emailError) {
+      console.error("Error al enviar correo de bienvenida:", emailError);
+    }
+
     return res.status(201).json({
       message: "Cliente registrado exitosamente",
       token,
@@ -222,7 +225,6 @@ exports.registerCliente = async (req, res) => {
   }
 };
 
-// REGISTER para admin (original)
 exports.register = async (req, res) => {
   try {
     const { nombre, email, password, ip_registro } = req.body;
@@ -233,7 +235,6 @@ exports.register = async (req, res) => {
       });
     }
 
-    // Verificar si el email ya existe en cualquiera de las dos tablas
     const [existingAdmin] = await db.execute(
       "SELECT usuarioid FROM usuarios WHERE email = ? LIMIT 1",
       [email]
@@ -249,20 +250,17 @@ exports.register = async (req, res) => {
       });
     }
 
-    // Validar password (mínimo 6 caracteres)
     if (password.length < 6) {
       return res.status(400).json({
         error: "La contraseña debe tener al menos 6 caracteres"
       });
     }
 
-    // Encriptar password
     const saltRounds = 10;
     const hashedPassword = await bcrypt.hash(password, saltRounds);
 
     const fecha_creacion = getMexicoISO();
 
-    // Insertar nuevo usuario (rolid 3 = visitante por defecto)
     const [result] = await db.execute(
       `INSERT INTO usuarios 
        (nombre, email, password, rolid, activo, creado, ip_ultimo_login) 
@@ -282,6 +280,12 @@ exports.register = async (req, res) => {
         expiresIn: process.env.JWT_EXPIRES_IN
       }
     );
+
+    try {
+      await sendWelcomeEmail(email, nombre, 'admin');
+    } catch (emailError) {
+      console.error("Error al enviar correo de bienvenida:", emailError);
+    }
 
     return res.status(201).json({
       message: "Usuario registrado exitosamente",
@@ -305,7 +309,6 @@ exports.register = async (req, res) => {
   }
 };
 
-// LOGOUT (soporta ambos tipos)
 exports.logout = async (req, res) => {
   try {
     const authHeader = req.headers["authorization"];
@@ -345,7 +348,6 @@ exports.logout = async (req, res) => {
   }
 };
 
-// GET PROFILE (soporta ambos tipos)
 exports.getProfile = async (req, res) => {
   try {
     const usuarioid = req.user.usuarioid;
@@ -394,7 +396,6 @@ exports.getProfile = async (req, res) => {
   }
 };
 
-// UPDATE CLIENTE PROFILE (solo para clientes)
 exports.updateClienteProfile = async (req, res) => {
   try {
     const usuarioid = req.user.usuarioid;
@@ -406,7 +407,6 @@ exports.updateClienteProfile = async (req, res) => {
       notas
     } = req.body;
 
-    // Actualizar información del cliente
     await db.execute(
       `UPDATE clientes 
        SET telefono = ?, telefono_alternativo = ?, fecha_nacimiento = ?, genero = ?,
@@ -438,7 +438,6 @@ exports.updateClienteProfile = async (req, res) => {
   }
 };
 
-// CHANGE PASSWORD (soporta ambos tipos)
 exports.changePassword = async (req, res) => {
   try {
     const { password_actual, password_nuevo } = req.body;
@@ -499,7 +498,6 @@ exports.changePassword = async (req, res) => {
   }
 };
 
-// FORGOT PASSWORD (soporta ambos tipos)
 exports.forgotPassword = async (req, res) => {
   try {
     const { email, tipo = 'admin' } = req.body;
@@ -530,7 +528,6 @@ exports.forgotPassword = async (req, res) => {
     expiracion.setHours(expiracion.getHours() + 1);
     const expiracionStr = expiracion.toISOString().slice(0, 19).replace("T", " ");
 
-    // Crear tabla de tokens si no existe
     await db.execute(`
       CREATE TABLE IF NOT EXISTS ${tablas.tokens} (
         id int NOT NULL AUTO_INCREMENT,
@@ -568,7 +565,6 @@ exports.forgotPassword = async (req, res) => {
   }
 };
 
-// RESET PASSWORD (soporta ambos tipos)
 exports.resetPassword = async (req, res) => {
   try {
     const { token, new_password, tipo = 'admin' } = req.body;

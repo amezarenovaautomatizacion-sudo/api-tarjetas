@@ -3,13 +3,11 @@ const router = express.Router();
 const authController = require("../controllers/auth.controller");
 const { authenticateToken, authorizeCliente } = require("../middleware/auth.middleware");
 
-// Rutas públicas para admin
 router.post("/login", authController.login);
 router.post("/register", authController.register);
 router.post("/forgot-password", authController.forgotPassword);
 router.post("/reset-password", authController.resetPassword);
 
-// Rutas públicas para clientes
 router.post("/cliente/login", (req, res) => {
   req.body.tipo = 'cliente';
   authController.login(req, res);
@@ -24,12 +22,10 @@ router.post("/cliente/reset-password", (req, res) => {
   authController.resetPassword(req, res);
 });
 
-// Rutas protegidas para admin
 router.post("/logout", authenticateToken, authController.logout);
 router.get("/profile", authenticateToken, authController.getProfile);
 router.put("/change-password", authenticateToken, authController.changePassword);
 
-// Rutas protegidas para clientes
 router.post("/cliente/logout", authenticateToken, authController.logout);
 router.get("/cliente/profile", authenticateToken, authController.getProfile);
 router.put("/cliente/change-password", authenticateToken, authController.changePassword);

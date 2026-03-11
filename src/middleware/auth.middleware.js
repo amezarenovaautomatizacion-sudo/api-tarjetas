@@ -4,7 +4,7 @@ const db = require("../config/db");
 const authenticateToken = async (req, res, next) => {
   try {
     const authHeader = req.headers["authorization"];
-    const token = authHeader && authHeader.split(" ")[1]; // Bearer TOKEN
+    const token = authHeader && authHeader.split(" ")[1];
 
     if (!token) {
       return res.status(401).json({
@@ -12,7 +12,6 @@ const authenticateToken = async (req, res, next) => {
       });
     }
 
-    // Verificar si el token está en blacklist (para logout)
     const [blacklisted] = await db.execute(
       "SELECT token FROM tokens_blacklist WHERE token = ?",
       [token]
@@ -61,7 +60,6 @@ const authorizeRole = (rolesPermitidos) => {
   };
 };
 
-// Middleware para verificar que sea cliente (rolid 4)
 const authorizeCliente = (req, res, next) => {
   if (!req.user) {
     return res.status(401).json({

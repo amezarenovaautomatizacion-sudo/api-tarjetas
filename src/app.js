@@ -1,20 +1,61 @@
-// src/app.js
 const express = require("express");
+const cors = require("cors");
 require("dotenv").config();
 
 const authRoutes = require("./routes/auth.routes");
+const plantillaRoutes = require("./routes/plantilla.routes");
 
 const app = express();
 
+// Configuración mejorada de CORS
+const corsOptions = {
+  origin: function (origin, callback) {
+    // Permitir solicitudes sin origen (como apps móviles o Postman)
+    if (!origin) return callback(null, true);
+    
+    // Lista de orígenes permitidos (puedes agregar más)
+    const allowedOrigins = [
+      'http://localhost:3000',
+      'http://localhost:3001',
+      'http://localhost:5173', // Vite default
+      'http://127.0.0.1:5173',
+      'http://localhost:8080',
+      process.env.FRONTEND_URL
+    ].filter(Boolean); // Filtrar undefined
+    
+    if (allowedOrigins.indexOf(origin) !== -1 || process.env.NODE_ENV === 'development') {
+      callback(null, true);
+    } else {
+      callback(new Error('No permitido por CORS'));
+    }
+  },
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
+  credentials: true,
+  optionsSuccessStatus: 200
+};
+
+// Aplicar CORS a todas las rutas
+app.use(cors(corsOptions));
+
 app.use(express.json());
 
-// Ruta de inicio - muestra los endpoints disponibles en formato JSON
+function escapeHtml(text) {
+  if (!text) return "";
+  return text
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#039;");
+}
+
 app.get("/", (req, res) => {
   const baseUrl = `${req.protocol}://${req.get("host")}`;
   
   const endpoints = {
     api: "Tarjetas Renova API",
-    version: "1.0.0",
+    version: "1.3.0",
     base_url: baseUrl,
     documentacion: "Para una vista más detallada, accede a /docs",
     endpoints: {
@@ -220,6 +261,106 @@ app.get("/", (req, res) => {
           }
         }
       },
+      plantillas: {
+        variables: {
+          metodo: "GET",
+          url: "/api/variables",
+          descripcion: "Obtener todas las variables disponibles para plantillas",
+          autenticacion: false,
+          query: {
+            activo: "boolean (opcional, filtrar por activas)"
+          }
+        },
+        listar: {
+          metodo: "GET",
+          url: "/api/plantillas",
+          descripcion: "Listar todas las plantillas de tarjetas",
+          autenticacion: false,
+          query: {
+            categoriaid: "number (opcional, filtrar por categoría)",
+            activo: "boolean (opcional, filtrar por activas)"
+          }
+        },
+        obtener: {
+          metodo: "GET",
+          url: "/api/plantillas/:id",
+          descripcion: "Obtener una plantilla por ID o slug",
+          autenticacion: false,
+          params: {
+            id: "string (ID numérico o slug de la plantilla)"
+          }
+        },
+        crear: {
+          metodo: "POST",
+          url: "/api/plantillas",
+          descripcion: "Crear nueva plantilla de tarjeta (requiere admin/editor)",
+          autenticacion: true,
+          headers: {
+            Authorization: "Bearer {token}"
+          },
+          body: {
+            nombre: "string (requerido)",
+            descripcion: "string (opcional)",
+            html_content: "string (requerido, contenido HTML con variables $_nombre_$)",
+            css_content: "string (opcional, estilos CSS)",
+            preview_image: "string (opcional, URL de imagen de vista previa)",
+            categoriaid: "number (opcional, ID de categoría)",
+            usa_bootstrap: "boolean (opcional, por defecto true)",
+            usa_bootstrap_icons: "boolean (opcional, por defecto false)",
+            bootstrap_version: "string (opcional, por defecto '5.3')",
+            variables_requeridas: "array (opcional, IDs de variables requeridas)"
+          }
+        },
+        actualizar: {
+          metodo: "PUT",
+          url: "/api/plantillas/:id",
+          descripcion: "Actualizar plantilla existente (requiere admin/editor)",
+          autenticacion: true,
+          headers: {
+            Authorization: "Bearer {token}"
+          },
+          params: {
+            id: "string (ID de la plantilla)"
+          },
+          body: {
+            nombre: "string (opcional)",
+            descripcion: "string (opcional)",
+            html_content: "string (opcional)",
+            css_content: "string (opcional)",
+            preview_image: "string (opcional)",
+            categoriaid: "number (opcional)",
+            usa_bootstrap: "boolean (opcional)",
+            usa_bootstrap_icons: "boolean (opcional)",
+            bootstrap_version: "string (opcional)",
+            activo: "boolean (opcional)",
+            variables_requeridas: "array (opcional, IDs de variables requeridas)"
+          }
+        },
+        eliminar: {
+          metodo: "DELETE",
+          url: "/api/plantillas/:id",
+          descripcion: "Eliminar plantilla (soft delete, solo admin)",
+          autenticacion: true,
+          headers: {
+            Authorization: "Bearer {token}"
+          },
+          params: {
+            id: "string (ID de la plantilla)"
+          }
+        },
+        preview: {
+          metodo: "POST",
+          url: "/api/plantillas/:id/preview",
+          descripcion: "Obtener vista previa de plantilla con datos",
+          autenticacion: false,
+          params: {
+            id: "string (ID de la plantilla)"
+          },
+          body: {
+            datos: "object (opcional, valores para las variables)"
+          }
+        }
+      },
       rutas_compartidas: {
         perfil_unificado: {
           metodo: "GET",
@@ -274,14 +415,15 @@ app.get("/", (req, res) => {
       "Los tokens JWT expiran en 12 horas",
       "Para rutas protegidas, incluir header: Authorization: Bearer {token}",
       "Las rutas de administración y clientes están separadas para mayor claridad",
-      "El email debe ser único en todo el sistema (no puede haber un admin y cliente con el mismo email)"
+      "El email debe ser único en todo el sistema (no puede haber un admin y cliente con el mismo email)",
+      "Las plantillas usan variables con formato $_nombre_$ para reemplazar contenido",
+      "Las variables se validan automáticamente al crear/actualizar plantillas"
     ]
   };
 
   res.json(endpoints);
 });
 
-// Ruta de documentación HTML
 app.get("/docs", (req, res) => {
   const baseUrl = `${req.protocol}://${req.get("host")}`;
   
@@ -383,11 +525,6 @@ app.get("/docs", (req, res) => {
               padding: 1rem 1.5rem;
               background: #f8fafc;
               border-bottom: 1px solid #e2e8f0;
-              cursor: pointer;
-              transition: background 0.2s;
-          }
-          .endpoint-header:hover {
-              background: #f1f5f9;
           }
           .method {
               display: inline-block;
@@ -424,6 +561,7 @@ app.get("/docs", (req, res) => {
           .badge.admin { background: #dbeafe; color: #1e40af; border: 1px solid #93c5fd; }
           .badge.cliente { background: #fef3c7; color: #92400e; border: 1px solid #fcd34d; }
           .badge.both { background: #e0e7ff; color: #3730a3; border: 1px solid #a5b4fc; }
+          .badge.editor { background: #f1f5f9; color: #475569; border: 1px solid #cbd5e1; }
           .endpoint-content { padding: 1.5rem; }
           .description {
               color: #475569;
@@ -439,6 +577,8 @@ app.get("/docs", (req, res) => {
               font-family: 'Fira Code', monospace;
               font-size: 0.9rem;
               margin: 0.5rem 0;
+              white-space: pre-wrap;
+              word-wrap: break-word;
           }
           table {
               width: 100%;
@@ -481,21 +621,45 @@ app.get("/docs", (req, res) => {
               font-family: monospace;
               font-weight: 600;
           }
+          .variable-badge {
+              display: inline-block;
+              background: #e2e8f0;
+              padding: 0.25rem 0.5rem;
+              border-radius: 4px;
+              font-family: monospace;
+              font-size: 0.9rem;
+              margin: 0.25rem;
+              color: #0f172a;
+          }
+          .test-example {
+              background: #f0f9ff;
+              border-left: 4px solid #0ea5e9;
+              padding: 1rem;
+              margin: 1rem 0;
+              border-radius: 6px;
+          }
+          .test-example h4 {
+              color: #0369a1;
+              margin-bottom: 0.5rem;
+          }
+          .test-example pre {
+              background: #1e293b;
+              margin: 0.5rem 0;
+          }
       </style>
   </head>
   <body>
       <div class="header">
           <h1>Tarjetas Renova API</h1>
           <p>Documentación oficial para desarrolladores</p>
-          <span class="version">Versión 1.0.0</span>
+          <span class="version">Versión 1.3.0</span>
       </div>
       
       <div class="container">
-          <!-- Información General -->
           <div class="info-card">
               <h2>Información General</h2>
               <div class="info-grid">
-                  <div class="info-item"><strong>Base URL</strong><span>${baseUrl}/api</span></div>
+                  <div class="info-item"><strong>Base URL</strong><span>${escapeHtml(baseUrl)}/api</span></div>
                   <div class="info-item"><strong>Formato</strong><span>JSON</span></div>
                   <div class="info-item"><strong>Autenticación</strong><span>Bearer Token JWT</span></div>
                   <div class="info-item"><strong>Expiración Token</strong><span>12 horas</span></div>
@@ -505,13 +669,11 @@ app.get("/docs", (req, res) => {
               </div>
           </div>
 
-          <!-- ADMINISTRADORES -->
           <h2 class="section-title">Administradores</h2>
           <p style="margin-bottom: 1rem; color: #475569;">Rutas para administradores, editores y visitantes (roles 1, 2 y 3).</p>
 
-          <!-- Register Admin -->
           <div class="endpoint">
-              <div class="endpoint-header" onclick="toggleEndpoint(this)">
+              <div class="endpoint-header">
                   <span class="method post">POST</span>
                   <span class="path">/api/register</span>
                   <span class="badge public">Público</span>
@@ -519,18 +681,17 @@ app.get("/docs", (req, res) => {
               </div>
               <div class="endpoint-content">
                   <div class="description">Registrar un nuevo administrador/editor/visitante.</div>
-                  <pre>{
+                  <pre>${escapeHtml(`{
   "nombre": "Juan Pérez",
   "email": "admin@email.com",
   "password": "123456",
-  "ip_registro": "127.0.0.1"  // Opcional
-}</pre>
+  "ip_registro": "127.0.0.1"
+}`)}</pre>
               </div>
           </div>
 
-          <!-- Login Admin -->
           <div class="endpoint">
-              <div class="endpoint-header" onclick="toggleEndpoint(this)">
+              <div class="endpoint-header">
                   <span class="method post">POST</span>
                   <span class="path">/api/login</span>
                   <span class="badge public">Público</span>
@@ -538,18 +699,17 @@ app.get("/docs", (req, res) => {
               </div>
               <div class="endpoint-content">
                   <div class="description">Iniciar sesión como administrador (tipo 'admin' por defecto).</div>
-                  <pre>{
+                  <pre>${escapeHtml(`{
   "email": "admin@email.com",
   "password": "123456",
-  "ip_ultimo_login": "127.0.0.1",  // Opcional
-  "tipo": "admin"  // Opcional, por defecto 'admin'
-}</pre>
+  "ip_ultimo_login": "127.0.0.1",
+  "tipo": "admin"
+}`)}</pre>
               </div>
           </div>
 
-          <!-- Forgot Password Admin -->
           <div class="endpoint">
-              <div class="endpoint-header" onclick="toggleEndpoint(this)">
+              <div class="endpoint-header">
                   <span class="method post">POST</span>
                   <span class="path">/api/forgot-password</span>
                   <span class="badge public">Público</span>
@@ -557,16 +717,15 @@ app.get("/docs", (req, res) => {
               </div>
               <div class="endpoint-content">
                   <div class="description">Solicitar recuperación de contraseña para administradores.</div>
-                  <pre>{
+                  <pre>${escapeHtml(`{
   "email": "admin@email.com",
-  "tipo": "admin"  // Opcional, por defecto 'admin'
-}</pre>
+  "tipo": "admin"
+}`)}</pre>
               </div>
           </div>
 
-          <!-- Reset Password Admin -->
           <div class="endpoint">
-              <div class="endpoint-header" onclick="toggleEndpoint(this)">
+              <div class="endpoint-header">
                   <span class="method post">POST</span>
                   <span class="path">/api/reset-password</span>
                   <span class="badge public">Público</span>
@@ -574,21 +733,19 @@ app.get("/docs", (req, res) => {
               </div>
               <div class="endpoint-content">
                   <div class="description">Restablecer contraseña de administrador con token.</div>
-                  <pre>{
+                  <pre>${escapeHtml(`{
   "token": "token_recibido_por_email",
   "new_password": "nueva123",
-  "tipo": "admin"  // Opcional, por defecto 'admin'
-}</pre>
+  "tipo": "admin"
+}`)}</pre>
               </div>
           </div>
 
-          <!-- CLIENTES -->
           <h2 class="section-title">Clientes</h2>
           <p style="margin-bottom: 1rem; color: #475569;">Rutas exclusivas para clientes (rol 4).</p>
 
-          <!-- Register Cliente -->
           <div class="endpoint">
-              <div class="endpoint-header" onclick="toggleEndpoint(this)">
+              <div class="endpoint-header">
                   <span class="method post">POST</span>
                   <span class="path">/api/cliente/register</span>
                   <span class="badge public">Público</span>
@@ -596,7 +753,7 @@ app.get("/docs", (req, res) => {
               </div>
               <div class="endpoint-content">
                   <div class="description">Registro completo de clientes con información detallada.</div>
-                  <pre>{
+                  <pre>${escapeHtml(`{
   "nombre": "María García",
   "email": "cliente@email.com",
   "password": "123456",
@@ -610,13 +767,12 @@ app.get("/docs", (req, res) => {
   "codigo_postal": "12345",
   "rfc": "GACM900101XXX",
   "razon_social": "María García Comercial"
-}</pre>
+}`)}</pre>
               </div>
           </div>
 
-          <!-- Login Cliente -->
           <div class="endpoint">
-              <div class="endpoint-header" onclick="toggleEndpoint(this)">
+              <div class="endpoint-header">
                   <span class="method post">POST</span>
                   <span class="path">/api/cliente/login</span>
                   <span class="badge public">Público</span>
@@ -624,32 +780,30 @@ app.get("/docs", (req, res) => {
               </div>
               <div class="endpoint-content">
                   <div class="description">Iniciar sesión como cliente (automáticamente tipo='cliente').</div>
-                  <pre>{
+                  <pre>${escapeHtml(`{
   "email": "cliente@email.com",
   "password": "123456",
-  "ip_ultimo_login": "127.0.0.1"  // Opcional
-}</pre>
+  "ip_ultimo_login": "127.0.0.1"
+}`)}</pre>
               </div>
           </div>
 
-          <!-- Profile Cliente -->
           <div class="endpoint">
-              <div class="endpoint-header" onclick="toggleEndpoint(this)">
+              <div class="endpoint-header">
                   <span class="method get">GET</span>
                   <span class="path">/api/cliente/profile</span>
                   <span class="badge private">Privado</span>
                   <span class="badge cliente">Cliente</span>
               </div>
               <div class="endpoint-content">
-                  <div class="description">Obtener perfil completo del cliente (incluye información de tabla clientes).</div>
-                  <pre>Headers:
-Authorization: Bearer eyJhbGciOiJIUzI1NiIs...</pre>
+                  <div class="description">Obtener perfil completo del cliente.</div>
+                  <pre>${escapeHtml(`Headers:
+Authorization: Bearer eyJhbGciOiJIUzI1NiIs...`)}</pre>
               </div>
           </div>
 
-          <!-- Update Cliente -->
           <div class="endpoint">
-              <div class="endpoint-header" onclick="toggleEndpoint(this)">
+              <div class="endpoint-header">
                   <span class="method put">PUT</span>
                   <span class="path">/api/cliente/update-profile</span>
                   <span class="badge private">Privado</span>
@@ -657,23 +811,19 @@ Authorization: Bearer eyJhbGciOiJIUzI1NiIs...</pre>
               </div>
               <div class="endpoint-content">
                   <div class="description">Actualizar información detallada del cliente.</div>
-                  <pre>Headers:
+                  <pre>${escapeHtml(`Headers:
 Authorization: Bearer eyJhbGciOiJIUzI1NiIs...
 
 {
   "telefono": "5559876543",
   "calle": "Av. Reforma",
-  "numero_exterior": "456",
-  "colonia": "Juárez",
-  "ciudad": "Ciudad de México",
-  "rfc": "NUEVORFC123456"
-}</pre>
+  "numero_exterior": "456"
+}`)}</pre>
               </div>
           </div>
 
-          <!-- Logout Cliente -->
           <div class="endpoint">
-              <div class="endpoint-header" onclick="toggleEndpoint(this)">
+              <div class="endpoint-header">
                   <span class="method post">POST</span>
                   <span class="path">/api/cliente/logout</span>
                   <span class="badge private">Privado</span>
@@ -681,14 +831,13 @@ Authorization: Bearer eyJhbGciOiJIUzI1NiIs...
               </div>
               <div class="endpoint-content">
                   <div class="description">Cerrar sesión de cliente.</div>
-                  <pre>Headers:
-Authorization: Bearer eyJhbGciOiJIUzI1NiIs...</pre>
+                  <pre>${escapeHtml(`Headers:
+Authorization: Bearer eyJhbGciOiJIUzI1NiIs...`)}</pre>
               </div>
           </div>
 
-          <!-- Change Password Cliente -->
           <div class="endpoint">
-              <div class="endpoint-header" onclick="toggleEndpoint(this)">
+              <div class="endpoint-header">
                   <span class="method put">PUT</span>
                   <span class="path">/api/cliente/change-password</span>
                   <span class="badge private">Privado</span>
@@ -696,19 +845,18 @@ Authorization: Bearer eyJhbGciOiJIUzI1NiIs...</pre>
               </div>
               <div class="endpoint-content">
                   <div class="description">Cambiar contraseña de cliente.</div>
-                  <pre>Headers:
+                  <pre>${escapeHtml(`Headers:
 Authorization: Bearer eyJhbGciOiJIUzI1NiIs...
 
 {
   "password_actual": "123456",
   "password_nuevo": "nueva123"
-}</pre>
+}`)}</pre>
               </div>
           </div>
 
-          <!-- Forgot Password Cliente -->
           <div class="endpoint">
-              <div class="endpoint-header" onclick="toggleEndpoint(this)">
+              <div class="endpoint-header">
                   <span class="method post">POST</span>
                   <span class="path">/api/cliente/forgot-password</span>
                   <span class="badge public">Público</span>
@@ -716,15 +864,14 @@ Authorization: Bearer eyJhbGciOiJIUzI1NiIs...
               </div>
               <div class="endpoint-content">
                   <div class="description">Solicitar recuperación de contraseña para clientes.</div>
-                  <pre>{
+                  <pre>${escapeHtml(`{
   "email": "cliente@email.com"
-}</pre>
+}`)}</pre>
               </div>
           </div>
 
-          <!-- Reset Password Cliente -->
           <div class="endpoint">
-              <div class="endpoint-header" onclick="toggleEndpoint(this)">
+              <div class="endpoint-header">
                   <span class="method post">POST</span>
                   <span class="path">/api/cliente/reset-password</span>
                   <span class="badge public">Público</span>
@@ -732,20 +879,284 @@ Authorization: Bearer eyJhbGciOiJIUzI1NiIs...
               </div>
               <div class="endpoint-content">
                   <div class="description">Restablecer contraseña de cliente con token.</div>
-                  <pre>{
+                  <pre>${escapeHtml(`{
   "token": "token_recibido_por_email",
   "new_password": "nueva123"
-}</pre>
+}`)}</pre>
               </div>
           </div>
 
-          <!-- RUTAS COMPARTIDAS -->
+          <h2 class="section-title">Plantillas de Tarjetas</h2>
+          <p style="margin-bottom: 1rem; color: #475569;">Sistema de plantillas con variables dinámicas.</p>
+          <div class="note">
+              <strong>Formato de variables:</strong> Las variables se definen como <code class="variable-badge">$_nombre_$</code>, <code class="variable-badge">$_apellido_$</code>, <code class="variable-badge">$_email_$</code>, etc. La API valida que todas las variables requeridas estén presentes.
+          </div>
+
+          <div class="endpoint">
+              <div class="endpoint-header">
+                  <span class="method get">GET</span>
+                  <span class="path">/api/variables</span>
+                  <span class="badge public">Público</span>
+              </div>
+              <div class="endpoint-content">
+                  <div class="description">Obtener todas las variables disponibles para usar en plantillas.</div>
+                  <div class="test-example">
+                      <h4>📋 Ejemplo de respuesta (ID 2):</h4>
+                      <pre>${escapeHtml(`{
+  "variables": [
+    {
+      "variableid": 1,
+      "nombre": "nombre",
+      "etiqueta": "Nombre",
+      "descripcion": "Nombre de la persona",
+      "tipo_dato": "texto",
+      "ejemplo": "Juan",
+      "es_requerida": 1,
+      "orden": 1
+    },
+    {
+      "variableid": 2,
+      "nombre": "apellido",
+      "etiqueta": "Apellido",
+      "descripcion": "Apellido de la persona",
+      "tipo_dato": "texto",
+      "ejemplo": "Pérez",
+      "es_requerida": 1,
+      "orden": 2
+    }
+  ]
+}`)}</pre>
+                  </div>
+              </div>
+          </div>
+
+          <div class="endpoint">
+              <div class="endpoint-header">
+                  <span class="method get">GET</span>
+                  <span class="path">/api/plantillas</span>
+                  <span class="badge public">Público</span>
+              </div>
+              <div class="endpoint-content">
+                  <div class="description">Listar todas las plantillas disponibles. Acepta filtros por categoría y estado.</div>
+                  <div class="test-example">
+                      <h4>🔍 Prueba realizada:</h4>
+                      <pre>${escapeHtml(`GET ${baseUrl}/api/plantillas?activo=1`)}</pre>
+                      <h4>📋 Respuesta (ID 2 incluido):</h4>
+                      <pre>${escapeHtml(`{
+  "plantillas": [
+    {
+      "plantillaid": 2,
+      "nombre": "Tarjeta Corporativa Ejecutiva",
+      "slug": "tarjeta-corporativa-ejecutiva",
+      "descripcion": "Plantilla profesional para ejecutivos",
+      "preview_image": null,
+      "categoria_nombre": null,
+      "total_variables": 3,
+      "visitas": 0,
+      "descargas": 0,
+      "creado": "2024-03-11T20:30:00.000Z"
+    }
+  ]
+}`)}</pre>
+                  </div>
+              </div>
+          </div>
+
+          <div class="endpoint">
+              <div class="endpoint-header">
+                  <span class="method get">GET</span>
+                  <span class="path">/api/plantillas/2</span>
+                  <span class="badge public">Público</span>
+              </div>
+              <div class="endpoint-content">
+                  <div class="description">Obtener la plantilla con ID 2.</div>
+                  <div class="test-example">
+                      <h4>🔍 Prueba realizada:</h4>
+                      <pre>${escapeHtml(`GET ${baseUrl}/api/plantillas/2`)}</pre>
+                      <h4>📋 Respuesta:</h4>
+                      <pre>${escapeHtml(`{
+  "plantilla": {
+    "plantillaid": 2,
+    "nombre": "Tarjeta Corporativa Ejecutiva",
+    "slug": "tarjeta-corporativa-ejecutiva",
+    "descripcion": "Plantilla profesional para ejecutivos",
+    "html_content": "<div class='tarjeta-ejecutiva' style='max-width: 500px; margin: 0 auto; font-family: \\"Helvetica Neue\\", Helvetica, Arial, sans-serif;'>\\n    <div style='background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 30px; text-align: center; border-radius: 10px 10px 0 0;'>\\n        <h1 style='margin: 0; font-size: 28px;'>$_nombre_$ $_apellido_$</h1>\\n        <h3 style='margin: 10px 0 0; font-weight: 300;'>$_puesto_$</h3>\\n    </div>\\n    <div style='background: white; padding: 30px; border-radius: 0 0 10px 10px; box-shadow: 0 2px 10px rgba(0,0,0,0.1);'>\\n        <div style='margin-bottom: 20px;'>\\n            <p style='margin: 5px 0;'><strong>🏢 Empresa:</strong> $_empresa_$</p>\\n            <p style='margin: 5px 0;'><strong>📧 Email:</strong> $_email_$</p>\\n            <p style='margin: 5px 0;'><strong>📞 Teléfono:</strong> $_telefono_$</p>\\n            <p style='margin: 5px 0;'><strong>📱 Móvil:</strong> $_telefono_movil_$</p>\\n            <p style='margin: 5px 0;'><strong>🌐 Web:</strong> $_sitio_web_$</p>\\n        </div>\\n        <div style='border-top: 1px solid #eee; padding-top: 20px;'>\\n            <p style='margin: 5px 0;'><strong>📍 Dirección:</strong> $_direccion_$</p>\\n            <p style='margin: 5px 0;'>$_ciudad_$, $_estado_$ $_codigo_postal_$</p>\\n            <p style='margin: 5px 0;'>$_pais_$</p>\\n        </div>\\n        <div style='margin-top: 20px; text-align: center;'>\\n            <div style='display: inline-block; margin: 0 10px;'>🔗 $_linkedin_$</div>\\n            <div style='display: inline-block; margin: 0 10px;'>🐦 $_twitter_$</div>\\n            <div style='display: inline-block; margin: 0 10px;'>📷 $_instagram_$</div>\\n        </div>\\n        <div style='margin-top: 20px; text-align: center;'>\\n            <img src='https://api.qrserver.com/v1/create-qr-code/?size=100x100&data=$_qr_url_$' alt='QR Code' style='width: 100px; height: 100px;'>\\n        </div>\\n        <p style='text-align: center; margin-top: 20px; font-style: italic; color: #666;'>$_lema_$</p>\\n    </div>\\n</div>",
+    "css_content": ".tarjeta-ejecutiva { box-shadow: 0 4px 6px rgba(0,0,0,0.1); }",
+    "usa_bootstrap": 0,
+    "usa_bootstrap_icons": 0,
+    "bootstrap_version": "5.3",
+    "visitas": 1,
+    "descargas": 0,
+    "variables_requeridas": [
+      {
+        "variableid": 1,
+        "nombre": "nombre",
+        "etiqueta": "Nombre",
+        "es_requerida": 1
+      },
+      {
+        "variableid": 2,
+        "nombre": "apellido",
+        "etiqueta": "Apellido",
+        "es_requerida": 1
+      },
+      {
+        "variableid": 6,
+        "nombre": "email",
+        "etiqueta": "Email",
+        "es_requerida": 1
+      }
+    ]
+  }
+}`)}</pre>
+                  </div>
+              </div>
+          </div>
+
+          <div class="endpoint">
+              <div class="endpoint-header">
+                  <span class="method get">GET</span>
+                  <span class="path">/api/plantillas/tarjeta-corporativa-ejecutiva</span>
+                  <span class="badge public">Público</span>
+              </div>
+              <div class="endpoint-content">
+                  <div class="description">Obtener la misma plantilla usando su slug.</div>
+                  <div class="test-example">
+                      <h4>🔍 Prueba realizada:</h4>
+                      <pre>${escapeHtml(`GET ${baseUrl}/api/plantillas/tarjeta-corporativa-ejecutiva`)}</pre>
+                      <h4>📋 Respuesta:</h4>
+                      <pre>${escapeHtml(`Misma respuesta que GET /api/plantillas/2`)}</pre>
+                  </div>
+              </div>
+          </div>
+
+          <div class="endpoint">
+              <div class="endpoint-header">
+                  <span class="method post">POST</span>
+                  <span class="path">/api/plantillas/2/preview</span>
+                  <span class="badge public">Público</span>
+              </div>
+              <div class="endpoint-content">
+                  <div class="description">Obtener vista previa de la plantilla ID 2 con datos de ejemplo.</div>
+                  <div class="test-example">
+                      <h4>🔍 Prueba realizada:</h4>
+                      <pre>${escapeHtml(`POST ${baseUrl}/api/plantillas/2/preview
+Content-Type: application/json
+
+{
+  "datos": {
+    "nombre": "Carlos",
+    "apellido": "Rodríguez",
+    "puesto": "Director de Ventas",
+    "empresa": "Tarjetas Renova S.A. de C.V.",
+    "email": "carlos.rodriguez@renova.com",
+    "telefono": "+52 55 1234 5678",
+    "telefono_movil": "+52 55 8765 4321",
+    "sitio_web": "www.renova.com/crodriguez",
+    "direccion": "Av. Paseo de la Reforma #123",
+    "ciudad": "Ciudad de México",
+    "estado": "CDMX",
+    "codigo_postal": "06500",
+    "pais": "México",
+    "linkedin": "linkedin.com/in/crodriguez",
+    "twitter": "@crodriguez",
+    "instagram": "@crodriguez_oficial",
+    "qr_url": "https://tarjetasrenova.com/crodriguez",
+    "lema": "Transformando ideas en realidad"
+  }
+}`)}</pre>
+                      <h4>📋 Respuesta (parcial):</h4>
+                      <pre>${escapeHtml(`{
+  "html_preview": "<div class='tarjeta-ejecutiva' style='max-width: 500px; margin: 0 auto; font-family: \\"Helvetica Neue\\", Helvetica, Arial, sans-serif;'>\\n    <div style='background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 30px; text-align: center; border-radius: 10px 10px 0 0;'>\\n        <h1 style='margin: 0; font-size: 28px;'>Carlos Rodríguez</h1>\\n        <h3 style='margin: 10px 0 0; font-weight: 300;'>Director de Ventas</h3>\\n    </div>\\n    ...",
+  "css_preview": ".tarjeta-ejecutiva { box-shadow: 0 4px 6px rgba(0,0,0,0.1); }",
+  "usa_bootstrap": false,
+  "usa_bootstrap_icons": false,
+  "bootstrap_version": "5.3"
+}`)}</pre>
+                  </div>
+              </div>
+          </div>
+
+          <div class="endpoint">
+              <div class="endpoint-header">
+                  <span class="method post">POST</span>
+                  <span class="path">/api/plantillas</span>
+                  <span class="badge private">Privado</span>
+                  <span class="badge admin">Admin</span>
+                  <span class="badge editor">Editor</span>
+              </div>
+              <div class="endpoint-content">
+                  <div class="description">Crear una nueva plantilla. Valida automáticamente que las variables requeridas estén presentes.</div>
+                  <div class="test-example">
+                      <h4>📝 Ejemplo de creación (la plantilla ID 2 se creó con):</h4>
+                      <pre>${escapeHtml(`Headers:
+Authorization: Bearer eyJhbGciOiJIUzI1NiIs...
+
+{
+  "nombre": "Tarjeta Corporativa Ejecutiva",
+  "descripcion": "Plantilla profesional para ejecutivos",
+  "html_content": "<div class='tarjeta-ejecutiva'...>$_nombre_$ $_apellido_$...</div>",
+  "css_content": ".tarjeta-ejecutiva { box-shadow: 0 4px 6px rgba(0,0,0,0.1); }",
+  "usa_bootstrap": false,
+  "variables_requeridas": [1, 2, 6]
+}`)}</pre>
+                  </div>
+              </div>
+          </div>
+
+          <div class="endpoint">
+              <div class="endpoint-header">
+                  <span class="method put">PUT</span>
+                  <span class="path">/api/plantillas/2</span>
+                  <span class="badge private">Privado</span>
+                  <span class="badge admin">Admin</span>
+                  <span class="badge editor">Editor</span>
+              </div>
+              <div class="endpoint-content">
+                  <div class="description">Actualizar la plantilla ID 2.</div>
+                  <div class="test-example">
+                      <h4>📝 Ejemplo de actualización:</h4>
+                      <pre>${escapeHtml(`Headers:
+Authorization: Bearer eyJhbGciOiJIUzI1NiIs...
+
+{
+  "descripcion": "Versión premium - Plantilla profesional para ejecutivos",
+  "usa_bootstrap_icons": true
+}`)}</pre>
+                      <h4>📋 Respuesta:</h4>
+                      <pre>${escapeHtml(`{
+  "message": "Plantilla actualizada exitosamente"
+}`)}</pre>
+                  </div>
+              </div>
+          </div>
+
+          <div class="endpoint">
+              <div class="endpoint-header">
+                  <span class="method delete">DELETE</span>
+                  <span class="path">/api/plantillas/2</span>
+                  <span class="badge private">Privado</span>
+                  <span class="badge admin">Admin</span>
+              </div>
+              <div class="endpoint-content">
+                  <div class="description">Eliminar plantilla ID 2 (soft delete).</div>
+                  <div class="test-example">
+                      <h4>🔍 Prueba realizada:</h4>
+                      <pre>${escapeHtml(`DELETE ${baseUrl}/api/plantillas/2
+Authorization: Bearer eyJhbGciOiJIUzI1NiIs...`)}</pre>
+                      <h4>📋 Respuesta:</h4>
+                      <pre>${escapeHtml(`{
+  "message": "Plantilla eliminada exitosamente"
+}`)}</pre>
+                  </div>
+              </div>
+          </div>
+
           <h2 class="section-title">Rutas Compartidas</h2>
           <p style="margin-bottom: 1rem; color: #475569;">Estas rutas funcionan para ambos tipos de usuario y detectan automáticamente el tipo según el token.</p>
 
-          <!-- Profile Unificado -->
           <div class="endpoint">
-              <div class="endpoint-header" onclick="toggleEndpoint(this)">
+              <div class="endpoint-header">
                   <span class="method get">GET</span>
                   <span class="path">/api/profile</span>
                   <span class="badge private">Privado</span>
@@ -753,14 +1164,13 @@ Authorization: Bearer eyJhbGciOiJIUzI1NiIs...
               </div>
               <div class="endpoint-content">
                   <div class="description">Obtener perfil (detecta automáticamente si es admin o cliente por el token).</div>
-                  <pre>Headers:
-Authorization: Bearer eyJhbGciOiJIUzI1NiIs...</pre>
+                  <pre>${escapeHtml(`Headers:
+Authorization: Bearer eyJhbGciOiJIUzI1NiIs...`)}</pre>
               </div>
           </div>
 
-          <!-- Logout Unificado -->
           <div class="endpoint">
-              <div class="endpoint-header" onclick="toggleEndpoint(this)">
+              <div class="endpoint-header">
                   <span class="method post">POST</span>
                   <span class="path">/api/logout</span>
                   <span class="badge private">Privado</span>
@@ -768,14 +1178,13 @@ Authorization: Bearer eyJhbGciOiJIUzI1NiIs...</pre>
               </div>
               <div class="endpoint-content">
                   <div class="description">Cerrar sesión (detecta automáticamente el tipo de usuario).</div>
-                  <pre>Headers:
-Authorization: Bearer eyJhbGciOiJIUzI1NiIs...</pre>
+                  <pre>${escapeHtml(`Headers:
+Authorization: Bearer eyJhbGciOiJIUzI1NiIs...`)}</pre>
               </div>
           </div>
 
-          <!-- Change Password Unificado -->
           <div class="endpoint">
-              <div class="endpoint-header" onclick="toggleEndpoint(this)">
+              <div class="endpoint-header">
                   <span class="method put">PUT</span>
                   <span class="path">/api/change-password</span>
                   <span class="badge private">Privado</span>
@@ -783,17 +1192,16 @@ Authorization: Bearer eyJhbGciOiJIUzI1NiIs...</pre>
               </div>
               <div class="endpoint-content">
                   <div class="description">Cambiar contraseña (detecta automáticamente el tipo de usuario).</div>
-                  <pre>Headers:
+                  <pre>${escapeHtml(`Headers:
 Authorization: Bearer eyJhbGciOiJIUzI1NiIs...
 
 {
   "password_actual": "123456",
   "password_nuevo": "nueva123"
-}</pre>
+}`)}</pre>
               </div>
           </div>
 
-          <!-- Códigos de Respuesta -->
           <div class="info-card">
               <h2>Códigos de Respuesta HTTP</h2>
               <table>
@@ -808,7 +1216,33 @@ Authorization: Bearer eyJhbGciOiJIUzI1NiIs...
               </table>
           </div>
 
-          <!-- Roles -->
+          <div class="info-card">
+              <h2>Variables Disponibles</h2>
+              <p style="margin-bottom: 1rem;">Lista de variables predefinidas para usar en plantillas:</p>
+              <table class="role-table">
+                  <tr><th>Variable</th><th>Etiqueta</th><th>Tipo</th><th>Ejemplo</th></tr>
+                  <tr><td>$_nombre_$</td><td>Nombre</td><td>texto</td><td>Juan</td></tr>
+                  <tr><td>$_apellido_$</td><td>Apellido</td><td>texto</td><td>Pérez</td></tr>
+                  <tr><td>$_nombre_completo_$</td><td>Nombre Completo</td><td>texto</td><td>Juan Pérez</td></tr>
+                  <tr><td>$_puesto_$</td><td>Puesto</td><td>texto</td><td>Director Comercial</td></tr>
+                  <tr><td>$_empresa_$</td><td>Empresa</td><td>texto</td><td>Tarjetas Renova</td></tr>
+                  <tr><td>$_email_$</td><td>Email</td><td>email</td><td>contacto@empresa.com</td></tr>
+                  <tr><td>$_telefono_$</td><td>Teléfono</td><td>telefono</td><td>+52 55 1234 5678</td></tr>
+                  <tr><td>$_telefono_movil_$</td><td>Teléfono Móvil</td><td>telefono</td><td>+52 55 8765 4321</td></tr>
+                  <tr><td>$_direccion_$</td><td>Dirección</td><td>texto</td><td>Av. Reforma #123</td></tr>
+                  <tr><td>$_ciudad_$</td><td>Ciudad</td><td>texto</td><td>Ciudad de México</td></tr>
+                  <tr><td>$_estado_$</td><td>Estado</td><td>texto</td><td>CDMX</td></tr>
+                  <tr><td>$_pais_$</td><td>País</td><td>texto</td><td>México</td></tr>
+                  <tr><td>$_codigo_postal_$</td><td>Código Postal</td><td>texto</td><td>06600</td></tr>
+                  <tr><td>$_sitio_web_$</td><td>Sitio Web</td><td>texto</td><td>www.empresa.com</td></tr>
+                  <tr><td>$_linkedin_$</td><td>LinkedIn</td><td>texto</td><td>linkedin.com/in/usuario</td></tr>
+                  <tr><td>$_twitter_$</td><td>Twitter/X</td><td>texto</td><td>@usuario</td></tr>
+                  <tr><td>$_instagram_$</td><td>Instagram</td><td>texto</td><td>@usuario</td></tr>
+                  <tr><td>$_whatsapp_$</td><td>WhatsApp</td><td>telefono</td><td>+52 55 1234 5678</td></tr>
+                  <tr><td>$_qr_url_$</td><td>URL para QR</td><td>texto</td><td>https://tarjetasrenova.com/perfil</td></tr>
+              </table>
+          </div>
+
           <div class="info-card">
               <h2>Roles de Usuario</h2>
               <table class="role-table">
@@ -819,19 +1253,62 @@ Authorization: Bearer eyJhbGciOiJIUzI1NiIs...
                   <tr><td>4</td><td>Cliente</td><td>Cliente registrado en el sistema</td></tr>
               </table>
           </div>
+
+          <div class="info-card">
+              <h2>Colección de Postman</h2>
+              <p>Puedes importar esta colección en Postman para probar todos los endpoints:</p>
+              <pre>${escapeHtml(`{
+  "info": {
+    "name": "Tarjetas Renova API",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "Auth - Login Admin",
+      "request": {
+        "method": "POST",
+        "header": [],
+        "body": {
+          "mode": "raw",
+          "raw": "{\\n  \\"email\\": \\"admin@email.com\\",\\n  \\"password\\": \\"123456\\",\\n  \\"ip_ultimo_login\\": \\"127.0.0.1\\"\\n}",
+          "options": { "raw": { "language": "json" } }
+        },
+        "url": { "raw": "{{baseUrl}}/api/login", "host": ["{{baseUrl}}"], "path": ["api", "login"] }
+      }
+    },
+    {
+      "name": "Plantillas - Obtener ID 2",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": { "raw": "{{baseUrl}}/api/plantillas/2", "host": ["{{baseUrl}}"], "path": ["api", "plantillas", "2"] }
+      }
+    },
+    {
+      "name": "Plantillas - Preview ID 2",
+      "request": {
+        "method": "POST",
+        "header": [],
+        "body": {
+          "mode": "raw",
+          "raw": "{\\n  \\"datos\\": {\\n    \\"nombre\\": \\"Carlos\\",\\n    \\"apellido\\": \\"Rodríguez\\",\\n    \\"puesto\\": \\"Director de Ventas\\",\\n    \\"empresa\\": \\"Tarjetas Renova\\",\\n    \\"email\\": \\"carlos@renova.com\\",\\n    \\"telefono\\": \\"+52 55 1234 5678\\"\\n  }\\n}",
+          "options": { "raw": { "language": "json" } }
+        },
+        "url": { "raw": "{{baseUrl}}/api/plantillas/2/preview", "host": ["{{baseUrl}}"], "path": ["api", "plantillas", "2", "preview"] }
+      }
+    }
+  ],
+  "variable": [
+    { "key": "baseUrl", "value": "http://localhost:3000" }
+  ]
+}`)}</pre>
+          </div>
       </div>
       
       <div class="footer">
-          <p>Tarjetas Renova API v1.0.0 | Documentación para desarrolladores</p>
+          <p>Tarjetas Renova API v1.3.0 | Documentación para desarrolladores</p>
           <p style="margin-top: 0.5rem;">© 2026 Tarjetas Renova. Todos los derechos reservados.</p>
       </div>
-
-      <script>
-          function toggleEndpoint(header) {
-              const content = header.nextElementSibling;
-              content.style.display = content.style.display === 'none' ? 'block' : 'none';
-          }
-      </script>
   </body>
   </html>
   `;
@@ -840,9 +1317,9 @@ Authorization: Bearer eyJhbGciOiJIUzI1NiIs...
 });
 
 app.use("/api", authRoutes);
+app.use("/api", plantillaRoutes);
 
-// Middleware para rutas no encontradas
-app.use("/:anyPath", (req, res) => {
+app.use((req, res) => {
   res.status(404).json({
     error: "Ruta no encontrada",
     mensaje: "Consulta la documentación en / o /docs para ver los endpoints disponibles"
