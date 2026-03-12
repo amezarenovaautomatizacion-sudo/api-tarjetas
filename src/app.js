@@ -4,16 +4,14 @@ require("dotenv").config();
 
 const authRoutes = require("./routes/auth.routes");
 const plantillaRoutes = require("./routes/plantilla.routes");
+const tarjetaClienteRoutes = require("./routes/tarjetaCliente.routes");
 
 const app = express();
 
-// Configuración mejorada de CORS
 const corsOptions = {
   origin: function (origin, callback) {
-    // Permitir solicitudes sin origen (como apps móviles o Postman)
     if (!origin) return callback(null, true);
     
-    // Lista de orígenes permitidos
     const allowedOrigins = [
       'http://localhost:3000',
       'http://localhost:3001',
@@ -36,11 +34,7 @@ const corsOptions = {
   optionsSuccessStatus: 200
 };
 
-// Aplicar CORS a todas las rutas - ESTO ES SUFICIENTE
 app.use(cors(corsOptions));
-
-// NO USES app.options('*', cors(corsOptions)) - esto causa el error en Express 5
-
 app.use(express.json());
 
 function escapeHtml(text) {
@@ -53,13 +47,12 @@ function escapeHtml(text) {
     .replace(/'/g, "&#039;");
 }
 
-
 app.get("/", (req, res) => {
   const baseUrl = `${req.protocol}://${req.get("host")}`;
   
   const endpoints = {
     api: "Tarjetas Renova API",
-    version: "1.3.0",
+    version: "1.5.0",
     base_url: baseUrl,
     documentacion: "Para una vista más detallada, accede a /docs",
     endpoints: {
@@ -263,6 +256,98 @@ app.get("/", (req, res) => {
             token: "string (requerido)",
             new_password: "string (requerido, mínimo 6 caracteres)"
           }
+        },
+        tarjetas: {
+          crear: {
+            metodo: "POST",
+            url: "/api/cliente/tarjetas",
+            descripcion: "Crear una nueva tarjeta para el cliente",
+            autenticacion: true,
+            headers: {
+              Authorization: "Bearer {token}"
+            },
+            body: {
+              plantillaid: "number (requerido)",
+              nombre_tarjeta: "string (requerido)",
+              datos: "object (requerido, JSON con los datos de la tarjeta)",
+              visibilidad: "string (opcional, 'publico' o 'privado')"
+            }
+          },
+          listar: {
+            metodo: "GET",
+            url: "/api/cliente/tarjetas",
+            descripcion: "Listar todas las tarjetas del cliente con filtros",
+            autenticacion: true,
+            headers: {
+              Authorization: "Bearer {token}"
+            },
+            query: {
+              plantillaid: "number (opcional)",
+              visibilidad: "string (opcional)",
+              busqueda: "string (opcional)",
+              orden: "string (opcional, 'creado', 'nombre_tarjeta', 'actualizado')",
+              direccion: "string (opcional, 'ASC' o 'DESC')",
+              limite: "number (opcional, default 10)",
+              pagina: "number (opcional, default 1)"
+            }
+          },
+          obtener: {
+            metodo: "GET",
+            url: "/api/cliente/tarjetas/:id",
+            descripcion: "Obtener una tarjeta específica con su renderizado",
+            autenticacion: true,
+            headers: {
+              Authorization: "Bearer {token}"
+            },
+            params: {
+              id: "number (ID de la tarjeta)"
+            }
+          },
+          actualizar: {
+            metodo: "PUT",
+            url: "/api/cliente/tarjetas/:id",
+            descripcion: "Actualizar una tarjeta existente",
+            autenticacion: true,
+            headers: {
+              Authorization: "Bearer {token}"
+            },
+            params: {
+              id: "number (ID de la tarjeta)"
+            },
+            body: {
+              plantillaid: "number (opcional)",
+              nombre_tarjeta: "string (opcional)",
+              datos: "object (opcional)",
+              visibilidad: "string (opcional)"
+            }
+          },
+          eliminar: {
+            metodo: "DELETE",
+            url: "/api/cliente/tarjetas/:id",
+            descripcion: "Eliminar una tarjeta (soft delete)",
+            autenticacion: true,
+            headers: {
+              Authorization: "Bearer {token}"
+            },
+            params: {
+              id: "number (ID de la tarjeta)"
+            }
+          }
+        }
+      },
+      tarjetas_publicas: {
+        obtener: {
+          metodo: "GET",
+          url: "/api/tarjetas/publicas/:slug",
+          descripcion: "Obtener una tarjeta pública por su slug (incluye contador de visitas)",
+          autenticacion: false,
+          params: {
+            slug: "string (slug único de la tarjeta)"
+          },
+          notas: [
+            "Cada vez que se accede a este endpoint, se incrementa automáticamente el contador de visitas de la tarjeta",
+            "El contador de visitas permite medir la popularidad de cada tarjeta pública"
+          ]
         }
       },
       plantillas: {
@@ -421,7 +506,11 @@ app.get("/", (req, res) => {
       "Las rutas de administración y clientes están separadas para mayor claridad",
       "El email debe ser único en todo el sistema (no puede haber un admin y cliente con el mismo email)",
       "Las plantillas usan variables con formato $_nombre_$ para reemplazar contenido",
-      "Las variables se validan automáticamente al crear/actualizar plantillas"
+      "Las variables se validan automáticamente al crear/actualizar plantillas",
+      "Los clientes pueden crear múltiples tarjetas usando diferentes plantillas",
+      "Los datos de las tarjetas se guardan en formato JSON, separados de la plantilla",
+      "Las tarjetas públicas se pueden compartir mediante un slug único",
+      "Cada tarjeta pública tiene un contador de visitas que se incrementa automáticamente"
     ]
   };
 
@@ -650,13 +739,22 @@ app.get("/docs", (req, res) => {
               background: #1e293b;
               margin: 0.5rem 0;
           }
+          .visitas-badge {
+              background: #8b5cf6;
+              color: white;
+              padding: 0.25rem 0.75rem;
+              border-radius: 20px;
+              font-size: 0.8rem;
+              font-weight: 500;
+              margin-left: 1rem;
+          }
       </style>
   </head>
   <body>
       <div class="header">
           <h1>Tarjetas Renova API</h1>
           <p>Documentación oficial para desarrolladores</p>
-          <span class="version">Versión 1.3.0</span>
+          <span class="version">Versión 1.5.0</span>
       </div>
       
       <div class="container">
@@ -887,6 +985,150 @@ Authorization: Bearer eyJhbGciOiJIUzI1NiIs...
   "token": "token_recibido_por_email",
   "new_password": "nueva123"
 }`)}</pre>
+              </div>
+          </div>
+
+          <h2 class="section-title">Tarjetas de Cliente</h2>
+          <p style="margin-bottom: 1rem; color: #475569;">Gestión de tarjetas creadas por clientes.</p>
+
+          <div class="endpoint">
+              <div class="endpoint-header">
+                  <span class="method post">POST</span>
+                  <span class="path">/api/cliente/tarjetas</span>
+                  <span class="badge private">Privado</span>
+                  <span class="badge cliente">Cliente</span>
+              </div>
+              <div class="endpoint-content">
+                  <div class="description">Crear una nueva tarjeta para el cliente.</div>
+                  <pre>${escapeHtml(`Headers:
+Authorization: Bearer eyJhbGciOiJIUzI1NiIs...
+
+{
+  "plantillaid": 2,
+  "nombre_tarjeta": "Mi tarjeta profesional",
+  "visibilidad": "privado",
+  "datos": {
+    "nombre": "Carlos",
+    "apellido": "Rodríguez",
+    "puesto": "Director de Ventas",
+    "empresa": "Mi Empresa S.A.",
+    "email": "carlos@miempresa.com",
+    "telefono": "+52 55 1234 5678",
+    "ciudad": "Ciudad de México"
+  }
+}`)}</pre>
+              </div>
+          </div>
+
+          <div class="endpoint">
+              <div class="endpoint-header">
+                  <span class="method get">GET</span>
+                  <span class="path">/api/cliente/tarjetas</span>
+                  <span class="badge private">Privado</span>
+                  <span class="badge cliente">Cliente</span>
+              </div>
+              <div class="endpoint-content">
+                  <div class="description">Listar todas las tarjetas del cliente con filtros.</div>
+                  <pre>${escapeHtml(`Headers:
+Authorization: Bearer eyJhbGciOiJIUzI1NiIs...
+
+Query params:
+?plantillaid=2
+&visibilidad=publico
+&busqueda=profesional
+&orden=creado
+&direccion=DESC
+&limite=10
+&pagina=1`)}</pre>
+              </div>
+          </div>
+
+          <div class="endpoint">
+              <div class="endpoint-header">
+                  <span class="method get">GET</span>
+                  <span class="path">/api/cliente/tarjetas/:id</span>
+                  <span class="badge private">Privado</span>
+                  <span class="badge cliente">Cliente</span>
+              </div>
+              <div class="endpoint-content">
+                  <div class="description">Obtener una tarjeta específica con su HTML renderizado.</div>
+                  <pre>${escapeHtml(`Headers:
+Authorization: Bearer eyJhbGciOiJIUzI1NiIs...
+
+GET /api/cliente/tarjetas/5`)}</pre>
+              </div>
+          </div>
+
+          <div class="endpoint">
+              <div class="endpoint-header">
+                  <span class="method put">PUT</span>
+                  <span class="path">/api/cliente/tarjetas/:id</span>
+                  <span class="badge private">Privado</span>
+                  <span class="badge cliente">Cliente</span>
+              </div>
+              <div class="endpoint-content">
+                  <div class="description">Actualizar una tarjeta existente.</div>
+                  <pre>${escapeHtml(`Headers:
+Authorization: Bearer eyJhbGciOiJIUzI1NiIs...
+
+PUT /api/cliente/tarjetas/5
+{
+  "nombre_tarjeta": "Nuevo nombre",
+  "visibilidad": "publico",
+  "datos": {
+    "telefono": "+52 55 9999 8888"
+  }
+}`)}</pre>
+              </div>
+          </div>
+
+          <div class="endpoint">
+              <div class="endpoint-header">
+                  <span class="method delete">DELETE</span>
+                  <span class="path">/api/cliente/tarjetas/:id</span>
+                  <span class="badge private">Privado</span>
+                  <span class="badge cliente">Cliente</span>
+              </div>
+              <div class="endpoint-content">
+                  <div class="description">Eliminar una tarjeta (soft delete).</div>
+                  <pre>${escapeHtml(`Headers:
+Authorization: Bearer eyJhbGciOiJIUzI1NiIs...
+
+DELETE /api/cliente/tarjetas/5`)}</pre>
+              </div>
+          </div>
+
+          <h2 class="section-title">Tarjetas Públicas</h2>
+
+          <div class="endpoint">
+              <div class="endpoint-header">
+                  <span class="method get">GET</span>
+                  <span class="path">/api/tarjetas/publicas/:slug</span>
+                  <span class="badge public">Público</span>
+                  <span class="visitas-badge">Contador de visitas</span>
+              </div>
+              <div class="endpoint-content">
+                  <div class="description">Obtener una tarjeta pública por su slug. Cada vez que se accede a este endpoint, se incrementa automáticamente el contador de visitas de la tarjeta.</div>
+                  <div class="test-example">
+                      <h4>🔍 Ejemplo de respuesta:</h4>
+                      <pre>${escapeHtml(`{
+  "tarjetaclienteid": 1,
+  "nombre_tarjeta": "Mi Tarjeta Actualizada",
+  "plantilla_nombre": "Tarjeta Corporativa Ejecutiva",
+  "slug": "mi-tarjeta-actualizada-1",
+  "visitas": 5,
+  "renderizado": {
+    "html": "<div class='tarjeta-ejecutiva'>...",
+    "css": ".tarjeta-ejecutiva { ... }",
+    "usa_bootstrap": false,
+    "usa_bootstrap_icons": false,
+    "bootstrap_version": "5.3"
+  }
+}`)}</pre>
+                  </div>
+                  <div class="note">
+                      <strong>📊 Contador de visitas:</strong> El campo <code>visitas</code> se incrementa automáticamente con cada petición a este endpoint, permitiendo medir la popularidad de cada tarjeta.
+                  </div>
               </div>
           </div>
 
@@ -1281,24 +1523,53 @@ Authorization: Bearer eyJhbGciOiJIUzI1NiIs...
       }
     },
     {
+      "name": "Cliente - Crear Tarjeta",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{tokenCliente}}"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\\n  \\"plantillaid\\": 2,\\n  \\"nombre_tarjeta\\": \\"Mi tarjeta profesional\\",\\n  \\"visibilidad\\": \\"privado\\",\\n  \\"datos\\": {\\n    \\"nombre\\": \\"Carlos\\",\\n    \\"apellido\\": \\"Rodríguez\\",\\n    \\"puesto\\": \\"Director de Ventas\\",\\n    \\"empresa\\": \\"Mi Empresa S.A.\\",\\n    \\"email\\": \\"carlos@miempresa.com\\",\\n    \\"telefono\\": \\"+52 55 1234 5678\\",\\n    \\"ciudad\\": \\"Ciudad de México\\"\\n  }\\n}",
+          "options": { "raw": { "language": "json" } }
+        },
+        "url": { "raw": "{{baseUrl}}/api/cliente/tarjetas", "host": ["{{baseUrl}}"], "path": ["api", "cliente", "tarjetas"] }
+      }
+    },
+    {
+      "name": "Cliente - Listar Tarjetas",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{tokenCliente}}"
+          }
+        ],
+        "url": { "raw": "{{baseUrl}}/api/cliente/tarjetas?limite=10&pagina=1", "host": ["{{baseUrl}}"], "path": ["api", "cliente", "tarjetas"], "query": [
+          { "key": "limite", "value": "10" },
+          { "key": "pagina", "value": "1" }
+        ] }
+      }
+    },
+    {
+      "name": "Tarjeta Pública",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": { "raw": "{{baseUrl}}/api/tarjetas/publicas/mi-tarjeta-profesional-5", "host": ["{{baseUrl}}"], "path": ["api", "tarjetas", "publicas", "mi-tarjeta-profesional-5"] }
+      }
+    },
+    {
       "name": "Plantillas - Obtener ID 2",
       "request": {
         "method": "GET",
         "header": [],
         "url": { "raw": "{{baseUrl}}/api/plantillas/2", "host": ["{{baseUrl}}"], "path": ["api", "plantillas", "2"] }
-      }
-    },
-    {
-      "name": "Plantillas - Preview ID 2",
-      "request": {
-        "method": "POST",
-        "header": [],
-        "body": {
-          "mode": "raw",
-          "raw": "{\\n  \\"datos\\": {\\n    \\"nombre\\": \\"Carlos\\",\\n    \\"apellido\\": \\"Rodríguez\\",\\n    \\"puesto\\": \\"Director de Ventas\\",\\n    \\"empresa\\": \\"Tarjetas Renova\\",\\n    \\"email\\": \\"carlos@renova.com\\",\\n    \\"telefono\\": \\"+52 55 1234 5678\\"\\n  }\\n}",
-          "options": { "raw": { "language": "json" } }
-        },
-        "url": { "raw": "{{baseUrl}}/api/plantillas/2/preview", "host": ["{{baseUrl}}"], "path": ["api", "plantillas", "2", "preview"] }
       }
     }
   ],
@@ -1310,7 +1581,7 @@ Authorization: Bearer eyJhbGciOiJIUzI1NiIs...
       </div>
       
       <div class="footer">
-          <p>Tarjetas Renova API v1.3.0 | Documentación para desarrolladores</p>
+          <p>Tarjetas Renova API v1.5.0 | Documentación para desarrolladores</p>
           <p style="margin-top: 0.5rem;">© 2026 Tarjetas Renova. Todos los derechos reservados.</p>
       </div>
   </body>
@@ -1322,6 +1593,7 @@ Authorization: Bearer eyJhbGciOiJIUzI1NiIs...
 
 app.use("/api", authRoutes);
 app.use("/api", plantillaRoutes);
+app.use("/api", tarjetaClienteRoutes);
 
 app.use((req, res) => {
   res.status(404).json({
