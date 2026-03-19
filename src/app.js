@@ -19,6 +19,7 @@ const corsOptions = {
       'http://127.0.0.1:5173',
       'http://localhost:8080',
       'https://api-tarjetas.vercel.app',
+      'https://tarjetas-digitales-murex.vercel.app',
       process.env.FRONTEND_URL
     ].filter(Boolean);
     
