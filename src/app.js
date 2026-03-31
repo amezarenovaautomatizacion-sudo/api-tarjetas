@@ -6,6 +6,7 @@ const authRoutes = require("./routes/auth.routes");
 const plantillaRoutes = require("./routes/plantilla.routes");
 const tarjetaClienteRoutes = require("./routes/tarjetaCliente.routes");
 const qrRoutes = require("./routes/qr.routes");
+const twoFactorRoutes = require("./routes/twoFactor.routes");
 
 const app = express();
 
@@ -1574,6 +1575,7 @@ app.use("/api", authRoutes);
 app.use("/api", plantillaRoutes);
 app.use("/api", tarjetaClienteRoutes);
 app.use("/api", qrRoutes);
+app.use("/api", twoFactorRoutes);
 
 app.use((req, res) => {
   res.status(404).json({

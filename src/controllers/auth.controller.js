@@ -626,3 +626,157 @@ exports.resetPassword = async (req, res) => {
     });
   }
 };
+
+exports.loginWithTwoFactor = async (req, res) => {
+  try {
+    const { email, password, ip_ultimo_login, tipo = 'admin', two_factor_code, backup_code } = req.body;
+    const tablas = getTablasByTipo(tipo);
+    const twoFactorTablas = { usuarios: tablas.usuarios, twoFactor: tablas.twoFactor || 'two_factor_auth' };
+
+    if (!email || !password) {
+      return res.status(400).json({ error: "Email y password son requeridos" });
+    }
+
+    const [rows] = await db.execute(
+      `SELECT * FROM ${tablas.usuarios} WHERE email = ? AND activo = 1 LIMIT 1`,
+      [email]
+    );
+
+    if (rows.length === 0) {
+      return res.status(401).json({ error: "Usuario o contraseña incorrectos" });
+    }
+
+    const user = rows[0];
+    const passwordMatch = await bcrypt.compare(password, user.password);
+
+    if (!passwordMatch) {
+      return res.status(401).json({ error: "Usuario o contraseña incorrectos" });
+    }
+
+    if (user.two_factor_enabled === 1) {
+      if (!two_factor_code && !backup_code) {
+        return res.status(403).json({
+          error: "Se requiere código de verificación",
+          requires_two_factor: true,
+          two_factor_enabled: true
+        });
+      }
+
+      const isBackup = !!backup_code;
+      const codigo = two_factor_code || backup_code;
+
+      let query, params;
+
+      if (isBackup) {
+        const [codes] = await db.execute(
+          `SELECT id, codigo, usado FROM ${twoFactorTablas.twoFactor} WHERE usuarioid = ? AND tipo_usuario = ? AND usado = 0`,
+          [user.usuarioid, tipo]
+        );
+
+        let validCode = null;
+        for (const code of codes) {
+          const isValid = await bcrypt.compare(codigo, code.codigo);
+          if (isValid) {
+            validCode = code;
+            break;
+          }
+        }
+
+        if (!validCode) {
+          return res.status(401).json({ error: "Código de respaldo inválido o ya utilizado" });
+        }
+
+        await db.execute(
+          `UPDATE ${twoFactorTablas.twoFactor} SET usado = 1 WHERE id = ?`,
+          [validCode.id]
+        );
+      } else {
+        if (!/^\d{6}$/.test(codigo)) {
+          return res.status(400).json({ error: "Código inválido. Debe ser de 6 dígitos." });
+        }
+
+        const [codes] = await db.execute(
+          `SELECT id, codigo, expiracion, usado, intentos FROM ${twoFactorTablas.twoFactor} 
+           WHERE usuarioid = ? AND tipo_usuario = ? AND usado = 0 AND codigo = ? 
+           ORDER BY id DESC LIMIT 1`,
+          [user.usuarioid, tipo, codigo]
+        );
+
+        if (codes.length === 0) {
+          return res.status(401).json({ error: "Código inválido" });
+        }
+
+        const twoFactorRecord = codes[0];
+
+        if (new Date() > new Date(twoFactorRecord.expiracion)) {
+          await db.execute(
+            `UPDATE ${twoFactorTablas.twoFactor} SET usado = 1 WHERE id = ?`,
+            [twoFactorRecord.id]
+          );
+          return res.status(401).json({ error: "El código ha expirado. Solicita uno nuevo." });
+        }
+
+        if (twoFactorRecord.intentos >= 5) {
+          await db.execute(
+            `UPDATE ${twoFactorTablas.twoFactor} SET usado = 1 WHERE id = ?`,
+            [twoFactorRecord.id]
+          );
+          return res.status(401).json({ error: "Demasiados intentos. Solicita un nuevo código." });
+        }
+
+        await db.execute(
+          `UPDATE ${twoFactorTablas.twoFactor} SET intentos = intentos + 1 WHERE id = ?`,
+          [twoFactorRecord.id]
+        );
+      }
+
+      await db.execute(
+        `UPDATE ${twoFactorTablas.usuarios} SET two_factor_verified = 1 WHERE usuarioid = ?`,
+        [user.usuarioid]
+      );
+
+      await db.execute(
+        `UPDATE ${twoFactorTablas.twoFactor} SET usado = 1 WHERE usuarioid = ? AND tipo_usuario = ? AND usado = 0 AND LENGTH(codigo) = 6`,
+        [user.usuarioid, tipo]
+      );
+    }
+
+    const ultimo_login = getMexicoISO();
+
+    await db.execute(
+      `UPDATE ${tablas.usuarios} SET ultimo_login = ?, ip_ultimo_login = ? WHERE usuarioid = ?`,
+      [ultimo_login, ip_ultimo_login, user.usuarioid]
+    );
+
+    const token = jwt.sign(
+      { usuarioid: user.usuarioid, email: user.email, rolid: user.rolid, tipo: tipo, twoFactorVerified: user.two_factor_enabled === 1 },
+      process.env.JWT_SECRET,
+      { expiresIn: process.env.JWT_EXPIRES_IN }
+    );
+
+    delete user.password;
+
+    let infoAdicional = {};
+    if (tipo === 'cliente') {
+      const [clienteInfo] = await db.execute("SELECT * FROM clientes WHERE usuarioid = ?", [user.usuarioid]);
+      if (clienteInfo.length > 0) infoAdicional = clienteInfo[0];
+    }
+
+    try {
+      await sendLoginNotificationEmail(user.email, user.nombre, ip_ultimo_login, tipo);
+    } catch (emailError) {
+      console.error("Error al enviar notificación de login:", emailError);
+    }
+
+    return res.json({
+      token,
+      two_factor_enabled: user.two_factor_enabled === 1,
+      usuario: { ...user, ultimo_login, ip_ultimo_login, tipo },
+      ...(tipo === 'cliente' && { cliente: infoAdicional })
+    });
+
+  } catch (error) {
+    console.error(error);
+    return res.status(500).json({ error: "Error en login" });
+  }
+};
