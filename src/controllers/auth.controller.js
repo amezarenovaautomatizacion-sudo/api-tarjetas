@@ -30,6 +30,7 @@ exports.login = async (req, res) => {
   try {
     const { email, password, ip_ultimo_login, tipo = 'admin', two_factor_code, backup_code } = req.body;
     const tablas = getTablasByTipo(tipo);
+    const twoFactorTable = tipo === 'cliente' ? 'two_factor_auth' : 'two_factor_auth';
 
     if (!email || !password) {
       return res.status(400).json({
@@ -64,17 +65,18 @@ exports.login = async (req, res) => {
         expiracion.setMinutes(expiracion.getMinutes() + 10);
 
         await db.execute(
-          `DELETE FROM ${tablas.twoFactor} WHERE usuarioid = ? AND tipo_usuario = ? AND usado = 0 AND LENGTH(codigo) = 6`,
+          `DELETE FROM ${twoFactorTable} WHERE usuarioid = ? AND tipo_usuario = ? AND usado = 0 AND LENGTH(codigo) = 6`,
           [user.usuarioid, tipo]
         );
 
         await db.execute(
-          `INSERT INTO ${tablas.twoFactor} (usuarioid, tipo_usuario, codigo, expiracion, usado) VALUES (?, ?, ?, ?, 0)`,
+          `INSERT INTO ${twoFactorTable} (usuarioid, tipo_usuario, codigo, expiracion, usado) VALUES (?, ?, ?, ?, 0)`,
           [user.usuarioid, tipo, codigo, expiracion]
         );
 
         try {
           await sendTwoFactorCodeEmail(user.email, user.nombre, codigo);
+          console.log('Código 2FA enviado a:', user.email, codigo);
         } catch (emailError) {
           console.error("Error enviando código 2FA:", emailError);
         }
@@ -93,7 +95,7 @@ exports.login = async (req, res) => {
 
       if (isBackup) {
         const [codes] = await db.execute(
-          `SELECT id, codigo, usado FROM ${tablas.twoFactor} WHERE usuarioid = ? AND tipo_usuario = ? AND usado = 0 AND LENGTH(codigo) > 6`,
+          `SELECT id, codigo, usado FROM ${twoFactorTable} WHERE usuarioid = ? AND tipo_usuario = ? AND usado = 0 AND LENGTH(codigo) > 6`,
           [user.usuarioid, tipo]
         );
 
@@ -101,7 +103,7 @@ exports.login = async (req, res) => {
           const match = await bcrypt.compare(codigoIngresado, code.codigo);
           if (match) {
             isValid = true;
-            await db.execute(`UPDATE ${tablas.twoFactor} SET usado = 1 WHERE id = ?`, [code.id]);
+            await db.execute(`UPDATE ${twoFactorTable} SET usado = 1 WHERE id = ?`, [code.id]);
             break;
           }
         }
@@ -115,7 +117,7 @@ exports.login = async (req, res) => {
         }
 
         const [codes] = await db.execute(
-          `SELECT id, codigo, expiracion, usado, intentos FROM ${tablas.twoFactor} 
+          `SELECT id, codigo, expiracion, usado, intentos FROM ${twoFactorTable} 
            WHERE usuarioid = ? AND tipo_usuario = ? AND usado = 0 AND codigo = ? 
            ORDER BY id DESC LIMIT 1`,
           [user.usuarioid, tipo, codigoIngresado]
@@ -128,16 +130,16 @@ exports.login = async (req, res) => {
         const record = codes[0];
 
         if (new Date() > new Date(record.expiracion)) {
-          await db.execute(`UPDATE ${tablas.twoFactor} SET usado = 1 WHERE id = ?`, [record.id]);
+          await db.execute(`UPDATE ${twoFactorTable} SET usado = 1 WHERE id = ?`, [record.id]);
           return res.status(401).json({ error: "El código ha expirado. Solicita uno nuevo." });
         }
 
         if (record.intentos >= 5) {
-          await db.execute(`UPDATE ${tablas.twoFactor} SET usado = 1 WHERE id = ?`, [record.id]);
+          await db.execute(`UPDATE ${twoFactorTable} SET usado = 1 WHERE id = ?`, [record.id]);
           return res.status(401).json({ error: "Demasiados intentos. Solicita un nuevo código." });
         }
 
-        await db.execute(`UPDATE ${tablas.twoFactor} SET intentos = intentos + 1 WHERE id = ?`, [record.id]);
+        await db.execute(`UPDATE ${twoFactorTable} SET intentos = intentos + 1 WHERE id = ?`, [record.id]);
         isValid = true;
       }
 
@@ -148,7 +150,7 @@ exports.login = async (req, res) => {
         );
         
         await db.execute(
-          `UPDATE ${tablas.twoFactor} SET usado = 1 WHERE usuarioid = ? AND tipo_usuario = ? AND LENGTH(codigo) = 6 AND usado = 0`,
+          `UPDATE ${twoFactorTable} SET usado = 1 WHERE usuarioid = ? AND tipo_usuario = ? AND LENGTH(codigo) = 6 AND usado = 0`,
           [user.usuarioid, tipo]
         );
       } else {
