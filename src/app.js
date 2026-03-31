@@ -5,6 +5,7 @@ require("dotenv").config();
 const authRoutes = require("./routes/auth.routes");
 const plantillaRoutes = require("./routes/plantilla.routes");
 const tarjetaClienteRoutes = require("./routes/tarjetaCliente.routes");
+const qrRoutes = require("./routes/qr.routes");
 
 const app = express();
 
@@ -53,7 +54,7 @@ app.get("/", (req, res) => {
   
   const endpoints = {
     api: "Tarjetas Renova API",
-    version: "1.5.0",
+    version: "1.6.0",
     base_url: baseUrl,
     documentacion: "Para una vista más detallada, accede a /docs",
     endpoints: {
@@ -451,6 +452,24 @@ app.get("/", (req, res) => {
           }
         }
       },
+      codigos_qr: {
+        generar: {
+          metodo: "POST",
+          url: "/api/qr/generate",
+          descripcion: "Generar código QR para cualquier URL",
+          autenticacion: true,
+          headers: {
+            Authorization: "Bearer {token}"
+          },
+          body: {
+            url: "string (requerido)",
+            format: "string (opcional, 'png', 'base64' o 'svg', default 'base64')",
+            size: "number (opcional, tamaño en píxeles, default 300)",
+            margin: "number (opcional, margen en píxeles, default 2)",
+            errorCorrection: "string (opcional, 'L', 'M', 'Q' o 'H', default 'M')"
+          }
+        }
+      },
       rutas_compartidas: {
         perfil_unificado: {
           metodo: "GET",
@@ -511,7 +530,8 @@ app.get("/", (req, res) => {
       "Los clientes pueden crear múltiples tarjetas usando diferentes plantillas",
       "Los datos de las tarjetas se guardan en formato JSON, separados de la plantilla",
       "Las tarjetas públicas se pueden compartir mediante un slug único",
-      "Cada tarjeta pública tiene un contador de visitas que se incrementa automáticamente"
+      "Cada tarjeta pública tiene un contador de visitas que se incrementa automáticamente",
+      "Se pueden generar códigos QR para compartir tarjetas de forma fácil"
     ]
   };
 
@@ -656,6 +676,7 @@ app.get("/docs", (req, res) => {
           .badge.cliente { background: #fef3c7; color: #92400e; border: 1px solid #fcd34d; }
           .badge.both { background: #e0e7ff; color: #3730a3; border: 1px solid #a5b4fc; }
           .badge.editor { background: #f1f5f9; color: #475569; border: 1px solid #cbd5e1; }
+          .badge.qr { background: #f3e8ff; color: #6b21a5; border: 1px solid #d8b4fe; }
           .endpoint-content { padding: 1.5rem; }
           .description {
               color: #475569;
@@ -755,7 +776,7 @@ app.get("/docs", (req, res) => {
       <div class="header">
           <h1>Tarjetas Renova API</h1>
           <p>Documentación oficial para desarrolladores</p>
-          <span class="version">Versión 1.5.0</span>
+          <span class="version">Versión 1.6.0</span>
       </div>
       
       <div class="container">
@@ -1133,6 +1154,50 @@ DELETE /api/cliente/tarjetas/5`)}</pre>
               </div>
           </div>
 
+          <h2 class="section-title">Códigos QR</h2>
+          <p style="margin-bottom: 1rem; color: #475569;">Genera códigos QR para compartir tus tarjetas digitales fácilmente.</p>
+
+          <div class="endpoint">
+              <div class="endpoint-header">
+                  <span class="method post">POST</span>
+                  <span class="path">/api/qr/generate</span>
+                  <span class="badge private">Privado</span>
+                  <span class="badge qr">QR</span>
+              </div>
+              <div class="endpoint-content">
+                  <div class="description">Genera un código QR para cualquier URL (requiere autenticación).</div>
+                  <div class="test-example">
+                      <h4>📝 Ejemplo de petición:</h4>
+                      <pre>${escapeHtml(`POST ${baseUrl}/api/qr/generate
+Content-Type: application/json
+Authorization: Bearer eyJhbGciOiJIUzI1NiIs...
+
+{
+  "url": "https://www.youtube.com/watch?v=MGy9sYnc6w8",
+  "format": "base64",
+  "size": 300,
+  "margin": 2,
+  "errorCorrection": "M"
+}`)}</pre>
+                      <h4>📋 Ejemplo de respuesta:</h4>
+                      <pre>${escapeHtml(`{
+  "success": true,
+  "url": "https://www.youtube.com/watch?v=MGy9sYnc6w8",
+  "qr": "data:image/png;base64,iVBORw0KGgoAAAANS...",
+  "formato": "base64",
+  "opciones": {
+    "width": 300,
+    "margin": 2,
+    "errorCorrectionLevel": "M"
+  }
+}`)}</pre>
+                  </div>
+                  <div class="note">
+                      <strong>📱 Formatos soportados:</strong> PNG (imagen directa), base64 (texto), SVG (vectorial)
+                  </div>
+              </div>
+          </div>
+
           <h2 class="section-title">Plantillas de Tarjetas</h2>
           <p style="margin-bottom: 1rem; color: #475569;">Sistema de plantillas con variables dinámicas.</p>
           <div class="note">
@@ -1148,7 +1213,7 @@ DELETE /api/cliente/tarjetas/5`)}</pre>
               <div class="endpoint-content">
                   <div class="description">Obtener todas las variables disponibles para usar en plantillas.</div>
                   <div class="test-example">
-                      <h4>📋 Ejemplo de respuesta (ID 2):</h4>
+                      <h4>📋 Ejemplo de respuesta:</h4>
                       <pre>${escapeHtml(`{
   "variables": [
     {
@@ -1185,27 +1250,7 @@ DELETE /api/cliente/tarjetas/5`)}</pre>
               </div>
               <div class="endpoint-content">
                   <div class="description">Listar todas las plantillas disponibles. Acepta filtros por categoría y estado.</div>
-                  <div class="test-example">
-                      <h4>🔍 Prueba realizada:</h4>
-                      <pre>${escapeHtml(`GET ${baseUrl}/api/plantillas?activo=1`)}</pre>
-                      <h4>📋 Respuesta (ID 2 incluido):</h4>
-                      <pre>${escapeHtml(`{
-  "plantillas": [
-    {
-      "plantillaid": 2,
-      "nombre": "Tarjeta Corporativa Ejecutiva",
-      "slug": "tarjeta-corporativa-ejecutiva",
-      "descripcion": "Plantilla profesional para ejecutivos",
-      "preview_image": null,
-      "categoria_nombre": null,
-      "total_variables": 3,
-      "visitas": 0,
-      "descargas": 0,
-      "creado": "2024-03-11T20:30:00.000Z"
-    }
-  ]
-}`)}</pre>
-                  </div>
+                  <pre>${escapeHtml(`GET ${baseUrl}/api/plantillas?activo=1`)}</pre>
               </div>
           </div>
 
@@ -1217,46 +1262,7 @@ DELETE /api/cliente/tarjetas/5`)}</pre>
               </div>
               <div class="endpoint-content">
                   <div class="description">Obtener la plantilla con ID 2.</div>
-                  <div class="test-example">
-                      <h4>🔍 Prueba realizada:</h4>
-                      <pre>${escapeHtml(`GET ${baseUrl}/api/plantillas/2`)}</pre>
-                      <h4>📋 Respuesta:</h4>
-                      <pre>${escapeHtml(`{
-  "plantilla": {
-    "plantillaid": 2,
-    "nombre": "Tarjeta Corporativa Ejecutiva",
-    "slug": "tarjeta-corporativa-ejecutiva",
-    "descripcion": "Plantilla profesional para ejecutivos",
-    "html_content": "<div class='tarjeta-ejecutiva' style='max-width: 500px; margin: 0 auto; font-family: \\"Helvetica Neue\\", Helvetica, Arial, sans-serif;'>\\n    <div style='background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 30px; text-align: center; border-radius: 10px 10px 0 0;'>\\n        <h1 style='margin: 0; font-size: 28px;'>$_nombre_$ $_apellido_$</h1>\\n        <h3 style='margin: 10px 0 0; font-weight: 300;'>$_puesto_$</h3>\\n    </div>\\n    <div style='background: white; padding: 30px; border-radius: 0 0 10px 10px; box-shadow: 0 2px 10px rgba(0,0,0,0.1);'>\\n        <div style='margin-bottom: 20px;'>\\n            <p style='margin: 5px 0;'><strong>🏢 Empresa:</strong> $_empresa_$</p>\\n            <p style='margin: 5px 0;'><strong>📧 Email:</strong> $_email_$</p>\\n            <p style='margin: 5px 0;'><strong>📞 Teléfono:</strong> $_telefono_$</p>\\n            <p style='margin: 5px 0;'><strong>📱 Móvil:</strong> $_telefono_movil_$</p>\\n            <p style='margin: 5px 0;'><strong>🌐 Web:</strong> $_sitio_web_$</p>\\n        </div>\\n        <div style='border-top: 1px solid #eee; padding-top: 20px;'>\\n            <p style='margin: 5px 0;'><strong>📍 Dirección:</strong> $_direccion_$</p>\\n            <p style='margin: 5px 0;'>$_ciudad_$, $_estado_$ $_codigo_postal_$</p>\\n            <p style='margin: 5px 0;'>$_pais_$</p>\\n        </div>\\n        <div style='margin-top: 20px; text-align: center;'>\\n            <div style='display: inline-block; margin: 0 10px;'>🔗 $_linkedin_$</div>\\n            <div style='display: inline-block; margin: 0 10px;'>🐦 $_twitter_$</div>\\n            <div style='display: inline-block; margin: 0 10px;'>📷 $_instagram_$</div>\\n        </div>\\n        <div style='margin-top: 20px; text-align: center;'>\\n            <img src='https://api.qrserver.com/v1/create-qr-code/?size=100x100&data=$_qr_url_$' alt='QR Code' style='width: 100px; height: 100px;'>\\n        </div>\\n        <p style='text-align: center; margin-top: 20px; font-style: italic; color: #666;'>$_lema_$</p>\\n    </div>\\n</div>",
-    "css_content": ".tarjeta-ejecutiva { box-shadow: 0 4px 6px rgba(0,0,0,0.1); }",
-    "usa_bootstrap": 0,
-    "usa_bootstrap_icons": 0,
-    "bootstrap_version": "5.3",
-    "visitas": 1,
-    "descargas": 0,
-    "variables_requeridas": [
-      {
-        "variableid": 1,
-        "nombre": "nombre",
-        "etiqueta": "Nombre",
-        "es_requerida": 1
-      },
-      {
-        "variableid": 2,
-        "nombre": "apellido",
-        "etiqueta": "Apellido",
-        "es_requerida": 1
-      },
-      {
-        "variableid": 6,
-        "nombre": "email",
-        "etiqueta": "Email",
-        "es_requerida": 1
-      }
-    ]
-  }
-}`)}</pre>
-                  </div>
+                  <pre>${escapeHtml(`GET /api/plantillas/2`)}</pre>
               </div>
           </div>
 
@@ -1268,12 +1274,7 @@ DELETE /api/cliente/tarjetas/5`)}</pre>
               </div>
               <div class="endpoint-content">
                   <div class="description">Obtener la misma plantilla usando su slug.</div>
-                  <div class="test-example">
-                      <h4>🔍 Prueba realizada:</h4>
-                      <pre>${escapeHtml(`GET ${baseUrl}/api/plantillas/tarjeta-corporativa-ejecutiva`)}</pre>
-                      <h4>📋 Respuesta:</h4>
-                      <pre>${escapeHtml(`Misma respuesta que GET /api/plantillas/2`)}</pre>
-                  </div>
+                  <pre>${escapeHtml(`GET ${baseUrl}/api/plantillas/tarjeta-corporativa-ejecutiva`)}</pre>
               </div>
           </div>
 
@@ -1285,42 +1286,14 @@ DELETE /api/cliente/tarjetas/5`)}</pre>
               </div>
               <div class="endpoint-content">
                   <div class="description">Obtener vista previa de la plantilla ID 2 con datos de ejemplo.</div>
-                  <div class="test-example">
-                      <h4>🔍 Prueba realizada:</h4>
-                      <pre>${escapeHtml(`POST ${baseUrl}/api/plantillas/2/preview
-Content-Type: application/json
-
+                  <pre>${escapeHtml(`POST ${baseUrl}/api/plantillas/2/preview
 {
   "datos": {
     "nombre": "Carlos",
     "apellido": "Rodríguez",
-    "puesto": "Director de Ventas",
-    "empresa": "Tarjetas Renova S.A. de C.V.",
-    "email": "carlos.rodriguez@renova.com",
-    "telefono": "+52 55 1234 5678",
-    "telefono_movil": "+52 55 8765 4321",
-    "sitio_web": "www.renova.com/crodriguez",
-    "direccion": "Av. Paseo de la Reforma #123",
-    "ciudad": "Ciudad de México",
-    "estado": "CDMX",
-    "codigo_postal": "06500",
-    "pais": "México",
-    "linkedin": "linkedin.com/in/crodriguez",
-    "twitter": "@crodriguez",
-    "instagram": "@crodriguez_oficial",
-    "qr_url": "https://tarjetasrenova.com/crodriguez",
-    "lema": "Transformando ideas en realidad"
+    "email": "carlos@email.com"
   }
 }`)}</pre>
-                      <h4>📋 Respuesta (parcial):</h4>
-                      <pre>${escapeHtml(`{
-  "html_preview": "<div class='tarjeta-ejecutiva' style='max-width: 500px; margin: 0 auto; font-family: \\"Helvetica Neue\\", Helvetica, Arial, sans-serif;'>\\n    <div style='background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 30px; text-align: center; border-radius: 10px 10px 0 0;'>\\n        <h1 style='margin: 0; font-size: 28px;'>Carlos Rodríguez</h1>\\n        <h3 style='margin: 10px 0 0; font-weight: 300;'>Director de Ventas</h3>\\n    </div>\\n    ...",
-  "css_preview": ".tarjeta-ejecutiva { box-shadow: 0 4px 6px rgba(0,0,0,0.1); }",
-  "usa_bootstrap": false,
-  "usa_bootstrap_icons": false,
-  "bootstrap_version": "5.3"
-}`)}</pre>
-                  </div>
               </div>
           </div>
 
@@ -1333,21 +1306,15 @@ Content-Type: application/json
                   <span class="badge editor">Editor</span>
               </div>
               <div class="endpoint-content">
-                  <div class="description">Crear una nueva plantilla. Valida automáticamente que las variables requeridas estén presentes.</div>
-                  <div class="test-example">
-                      <h4>📝 Ejemplo de creación (la plantilla ID 2 se creó con):</h4>
-                      <pre>${escapeHtml(`Headers:
+                  <div class="description">Crear una nueva plantilla (requiere admin o editor).</div>
+                  <pre>${escapeHtml(`Headers:
 Authorization: Bearer eyJhbGciOiJIUzI1NiIs...
 
 {
-  "nombre": "Tarjeta Corporativa Ejecutiva",
-  "descripcion": "Plantilla profesional para ejecutivos",
-  "html_content": "<div class='tarjeta-ejecutiva'...>$_nombre_$ $_apellido_$...</div>",
-  "css_content": ".tarjeta-ejecutiva { box-shadow: 0 4px 6px rgba(0,0,0,0.1); }",
-  "usa_bootstrap": false,
-  "variables_requeridas": [1, 2, 6]
+  "nombre": "Nueva Plantilla",
+  "html_content": "<div>$_nombre_$</div>",
+  "variables_requeridas": [1]
 }`)}</pre>
-                  </div>
               </div>
           </div>
 
@@ -1361,20 +1328,12 @@ Authorization: Bearer eyJhbGciOiJIUzI1NiIs...
               </div>
               <div class="endpoint-content">
                   <div class="description">Actualizar la plantilla ID 2.</div>
-                  <div class="test-example">
-                      <h4>📝 Ejemplo de actualización:</h4>
-                      <pre>${escapeHtml(`Headers:
+                  <pre>${escapeHtml(`Headers:
 Authorization: Bearer eyJhbGciOiJIUzI1NiIs...
 
 {
-  "descripcion": "Versión premium - Plantilla profesional para ejecutivos",
-  "usa_bootstrap_icons": true
+  "descripcion": "Nueva descripción"
 }`)}</pre>
-                      <h4>📋 Respuesta:</h4>
-                      <pre>${escapeHtml(`{
-  "message": "Plantilla actualizada exitosamente"
-}`)}</pre>
-                  </div>
               </div>
           </div>
 
@@ -1387,15 +1346,10 @@ Authorization: Bearer eyJhbGciOiJIUzI1NiIs...
               </div>
               <div class="endpoint-content">
                   <div class="description">Eliminar plantilla ID 2 (soft delete).</div>
-                  <div class="test-example">
-                      <h4>🔍 Prueba realizada:</h4>
-                      <pre>${escapeHtml(`DELETE ${baseUrl}/api/plantillas/2
-Authorization: Bearer eyJhbGciOiJIUzI1NiIs...`)}</pre>
-                      <h4>📋 Respuesta:</h4>
-                      <pre>${escapeHtml(`{
-  "message": "Plantilla eliminada exitosamente"
-}`)}</pre>
-                  </div>
+                  <pre>${escapeHtml(`Headers:
+Authorization: Bearer eyJhbGciOiJIUzI1NiIs...
+
+DELETE /api/plantillas/2`)}</pre>
               </div>
           </div>
 
@@ -1566,6 +1520,28 @@ Authorization: Bearer eyJhbGciOiJIUzI1NiIs...
       }
     },
     {
+      "name": "QR - Generar QR",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{tokenAdmin}}"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\\n  \\"url\\": \\"https://www.youtube.com/watch?v=MGy9sYnc6w8\\",\\n  \\"format\\": \\"base64\\",\\n  \\"size\\": 300\\n}",
+          "options": { "raw": { "language": "json" } }
+        },
+        "url": { "raw": "{{baseUrl}}/api/qr/generate", "host": ["{{baseUrl}}"], "path": ["api", "qr", "generate"] }
+      }
+    },
+    {
       "name": "Plantillas - Obtener ID 2",
       "request": {
         "method": "GET",
@@ -1575,14 +1551,16 @@ Authorization: Bearer eyJhbGciOiJIUzI1NiIs...
     }
   ],
   "variable": [
-    { "key": "baseUrl", "value": "http://localhost:3000" }
+    { "key": "baseUrl", "value": "http://localhost:3000" },
+    { "key": "tokenAdmin", "value": "TU_TOKEN_ADMIN_AQUI" },
+    { "key": "tokenCliente", "value": "TU_TOKEN_CLIENTE_AQUI" }
   ]
 }`)}</pre>
           </div>
       </div>
       
       <div class="footer">
-          <p>Tarjetas Renova API v1.5.0 | Documentación para desarrolladores</p>
+          <p>Tarjetas Renova API v1.6.0 | Documentación para desarrolladores</p>
           <p style="margin-top: 0.5rem;">© 2026 Tarjetas Renova. Todos los derechos reservados.</p>
       </div>
   </body>
@@ -1595,6 +1573,7 @@ Authorization: Bearer eyJhbGciOiJIUzI1NiIs...
 app.use("/api", authRoutes);
 app.use("/api", plantillaRoutes);
 app.use("/api", tarjetaClienteRoutes);
+app.use("/api", qrRoutes);
 
 app.use((req, res) => {
   res.status(404).json({
