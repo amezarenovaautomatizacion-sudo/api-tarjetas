@@ -10,15 +10,6 @@ const transporter = nodemailer.createTransport({
   }
 });
 
-const colors = {
-  primary: "#2690D8",
-  secondary: "#4BCADF",
-  accent: "#71E6D8",
-  dark: "#0C2F66",
-  text: "#2D3748",
-  muted: "#6B7280"
-};
-
 const getTwoFactorTemplate = (nombre, codigo, expiracionMinutos = 10) => `
 <!DOCTYPE html>
 <html lang="es">
@@ -42,7 +33,7 @@ const getTwoFactorTemplate = (nombre, codigo, expiracionMinutos = 10) => `
 <td style="padding:40px 35px;">
 <p style="color:#2D3748;font-size:16px;margin-bottom:20px;">Hola <strong>${nombre}</strong>,</p>
 <p style="color:#4A5568;font-size:15px;line-height:1.6;margin-bottom:25px;">
-Hemos recibido una solicitud para verificar tu identidad. Utiliza el siguiente código para completar el inicio de sesión:
+Hemos recibido una solicitud para iniciar sesión en tu cuenta. Utiliza el siguiente código para completar la verificación:
 </p>
 <div style="text-align:center;margin:30px 0;">
 <div style="display:inline-block;background:#F7FAFC;border:2px solid #E2E8F0;border-radius:16px;padding:20px 35px;">
@@ -52,7 +43,7 @@ Hemos recibido una solicitud para verificar tu identidad. Utiliza el siguiente c
 <div style="background:#F0FFF4;border-left:4px solid #48BB78;padding:18px 22px;border-radius:12px;margin:25px 0;">
 <p style="margin:0;color:#2D3748;font-size:14px;">
 <strong>⏰ Este código expirará en ${expiracionMinutos} minutos.</strong><br>
-Si no solicitaste este código, ignora este mensaje o contacta soporte.
+Si no solicitaste este código, ignora este mensaje o cambia tu contraseña inmediatamente.
 </p>
 </div>
 <p style="color:#718096;font-size:13px;margin-top:25px;text-align:center;">
@@ -74,20 +65,14 @@ Mensaje automático - No responder a este correo.
 </html>
 `;
 
-const sendTwoFactorCodeEmail = async (email, nombre, codigo) => {
-  const mailOptions = {
-    from: process.env.EMAIL_FROM,
-    to: email,
-    subject: "🔐 Código de verificación RENOVA",
-    html: getTwoFactorTemplate(nombre, codigo)
-  };
-  return await transporter.sendMail(mailOptions);
-};
+const getBackupCodesTemplate = (nombre, backupCodes) => {
+  const backupCodesList = backupCodes.map(code => `
+    <div style="background:#F7FAFC;padding:12px 15px;margin:8px 0;border-radius:10px;font-family:monospace;font-size:14px;border:1px solid #E2E8F0;letter-spacing:1px;">
+      ${code}
+    </div>
+  `).join('');
 
-const sendBackupCodesEmail = async (email, nombre, backupCodes) => {
-  const backupCodesList = backupCodes.map(code => `<div style="background:#F7FAFC;padding:10px 15px;margin:8px 0;border-radius:10px;font-family:monospace;font-size:14px;border:1px solid #E2E8F0;">${code}</div>`).join('');
-  
-  const html = `
+  return `
 <!DOCTYPE html>
 <html lang="es">
 <head>
@@ -109,15 +94,24 @@ const sendBackupCodesEmail = async (email, nombre, backupCodes) => {
 <tr>
 <td style="padding:40px 35px;">
 <p style="color:#2D3748;font-size:16px;">Hola <strong>${nombre}</strong>,</p>
-<p style="color:#4A5568;margin:20px 0;">Guarda estos códigos en un lugar seguro. Cada código puede usarse una sola vez para acceder a tu cuenta si no tienes acceso al código 2FA normal.</p>
+<p style="color:#4A5568;margin:20px 0;">Has activado la verificación de dos pasos. Guarda estos códigos en un lugar seguro. Cada código puede usarse una sola vez para acceder a tu cuenta si no tienes acceso al código 2FA normal.</p>
 <div style="background:#FFF5F5;border-left:4px solid #F56565;padding:15px;margin:20px 0;border-radius:8px;">
-<p style="margin:0;color:#C53030;font-size:13px;"><strong>⚠️ IMPORTANTE:</strong> Estos códigos son de un solo uso. No los compartas con nadie.</p>
+<p style="margin:0;color:#C53030;font-size:13px;"><strong>⚠️ IMPORTANTE:</strong> Estos códigos son de un solo uso. No los compartas con nadie. Si pierdes estos códigos y tu acceso al correo, no podrás acceder a tu cuenta.</p>
 </div>
 <div style="margin:25px 0;">
 <h4 style="color:#2D3748;margin-bottom:15px;">Tus códigos de respaldo:</h4>
 ${backupCodesList}
 </div>
+<div style="background:#EBF8FF;padding:15px;border-radius:8px;margin-top:20px;">
+<p style="margin:0;color:#2B6CB0;font-size:13px;"><strong>📝 Consejo:</strong> Imprime esta página o guarda los códigos en un gestor de contraseñas.</p>
+</div>
 <p style="color:#718096;font-size:13px;margin-top:25px;text-align:center;">Mensaje automático - No responder a este correo.</p>
+</td>
+</tr>
+<tr>
+<td style="background:#FAFAFA;border-top:1px solid #E5E7EB;padding:25px;text-align:center;">
+<div style="font-weight:800;color:#0C2F66;margin-bottom:6px;">RENOVA</div>
+<div style="color:#6B7280;font-size:12px;">© 2026 RENOVA - Todos los derechos reservados</div>
 </td>
 </tr>
 </table>
@@ -127,12 +121,24 @@ ${backupCodesList}
 </body>
 </html>
   `;
-  
+};
+
+const sendTwoFactorCodeEmail = async (email, nombre, codigo) => {
+  const mailOptions = {
+    from: process.env.EMAIL_FROM,
+    to: email,
+    subject: "🔐 Código de verificación RENOVA",
+    html: getTwoFactorTemplate(nombre, codigo)
+  };
+  return await transporter.sendMail(mailOptions);
+};
+
+const sendBackupCodesEmail = async (email, nombre, backupCodes) => {
   const mailOptions = {
     from: process.env.EMAIL_FROM,
     to: email,
     subject: "📋 Tus códigos de respaldo RENOVA",
-    html
+    html: getBackupCodesTemplate(nombre, backupCodes)
   };
   return await transporter.sendMail(mailOptions);
 };

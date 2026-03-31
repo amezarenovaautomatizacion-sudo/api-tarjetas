@@ -1,7 +1,7 @@
 const db = require("../config/db");
+const bcrypt = require("bcrypt");
 const { generateTwoFactorCode, generateBackupCodes, isCodeExpired, isValidCode } = require("../utils/twoFactor.utils");
 const { sendTwoFactorCodeEmail, sendBackupCodesEmail } = require("../utils/email2fa.utils");
-const bcrypt = require("bcrypt");
 
 const getTableNames = (tipo) => {
   if (tipo === 'cliente') {
@@ -35,7 +35,7 @@ exports.enableTwoFactor = async (req, res) => {
     );
     
     await db.execute(
-      `DELETE FROM ${tablas.twoFactor} WHERE usuarioid = ? AND tipo_usuario = ? AND usado = 0`,
+      `DELETE FROM ${tablas.twoFactor} WHERE usuarioid = ? AND tipo_usuario = ?`,
       [usuarioid, tipo]
     );
     
@@ -54,7 +54,7 @@ exports.enableTwoFactor = async (req, res) => {
     
     return res.json({
       success: true,
-      message: "2FA activado correctamente. Revisa tu correo para los códigos de respaldo.",
+      message: "2FA activado correctamente. En tu próximo inicio de sesión se te pedirá el código de verificación.",
       backup_codes: process.env.NODE_ENV === 'development' ? backupCodes : undefined
     });
     
@@ -111,6 +111,11 @@ exports.sendTwoFactorCode = async (req, res) => {
       return res.status(400).json({ error: "2FA no está activado para este usuario" });
     }
     
+    await db.execute(
+      `DELETE FROM ${tablas.twoFactor} WHERE usuarioid = ? AND tipo_usuario = ? AND usado = 0 AND LENGTH(codigo) = 6`,
+      [user.usuarioid, tipo]
+    );
+    
     const codigo = generateTwoFactorCode();
     const expiracion = new Date();
     expiracion.setMinutes(expiracion.getMinutes() + 10);
@@ -148,10 +153,6 @@ exports.verifyTwoFactorCode = async (req, res) => {
       return res.status(400).json({ error: "Email y código son requeridos" });
     }
     
-    if (!backup_code && !isValidCode(codigo)) {
-      return res.status(400).json({ error: "Código inválido. Debe ser de 6 dígitos." });
-    }
-    
     const [users] = await db.execute(
       `SELECT usuarioid, nombre, email, two_factor_enabled FROM ${tablas.usuarios} WHERE email = ? AND activo = 1`,
       [email]
@@ -162,34 +163,31 @@ exports.verifyTwoFactorCode = async (req, res) => {
     }
     
     const user = users[0];
-    
-    let query, params;
+    let isValid = false;
     
     if (backup_code) {
       const [codes] = await db.execute(
-        `SELECT id, codigo, usado FROM ${tablas.twoFactor} WHERE usuarioid = ? AND tipo_usuario = ? AND usado = 0`,
+        `SELECT id, codigo, usado FROM ${tablas.twoFactor} WHERE usuarioid = ? AND tipo_usuario = ? AND usado = 0 AND LENGTH(codigo) > 6`,
         [user.usuarioid, tipo]
       );
       
-      let validCode = null;
       for (const code of codes) {
-        const isValid = await bcrypt.compare(codigo, code.codigo);
-        if (isValid) {
-          validCode = code;
+        const match = await bcrypt.compare(codigo, code.codigo);
+        if (match) {
+          isValid = true;
+          await db.execute(`UPDATE ${tablas.twoFactor} SET usado = 1 WHERE id = ?`, [code.id]);
           break;
         }
       }
       
-      if (!validCode) {
+      if (!isValid) {
         return res.status(401).json({ error: "Código de respaldo inválido o ya utilizado" });
       }
-      
-      await db.execute(
-        `UPDATE ${tablas.twoFactor} SET usado = 1 WHERE id = ?`,
-        [validCode.id]
-      );
-      
     } else {
+      if (!/^\d{6}$/.test(codigo)) {
+        return res.status(400).json({ error: "Código inválido. Debe ser de 6 dígitos." });
+      }
+      
       const [codes] = await db.execute(
         `SELECT id, codigo, expiracion, usado, intentos FROM ${tablas.twoFactor} 
          WHERE usuarioid = ? AND tipo_usuario = ? AND usado = 0 AND codigo = ? 
@@ -201,52 +199,47 @@ exports.verifyTwoFactorCode = async (req, res) => {
         return res.status(401).json({ error: "Código inválido" });
       }
       
-      const twoFactorRecord = codes[0];
+      const record = codes[0];
       
-      if (isCodeExpired(twoFactorRecord.expiracion)) {
-        await db.execute(
-          `UPDATE ${tablas.twoFactor} SET usado = 1 WHERE id = ?`,
-          [twoFactorRecord.id]
-        );
+      if (isCodeExpired(record.expiracion)) {
+        await db.execute(`UPDATE ${tablas.twoFactor} SET usado = 1 WHERE id = ?`, [record.id]);
         return res.status(401).json({ error: "El código ha expirado. Solicita uno nuevo." });
       }
       
-      if (twoFactorRecord.intentos >= 5) {
-        await db.execute(
-          `UPDATE ${tablas.twoFactor} SET usado = 1 WHERE id = ?`,
-          [twoFactorRecord.id]
-        );
+      if (record.intentos >= 5) {
+        await db.execute(`UPDATE ${tablas.twoFactor} SET usado = 1 WHERE id = ?`, [record.id]);
         return res.status(401).json({ error: "Demasiados intentos. Solicita un nuevo código." });
       }
       
-      await db.execute(
-        `UPDATE ${tablas.twoFactor} SET intentos = intentos + 1 WHERE id = ?`,
-        [twoFactorRecord.id]
-      );
+      await db.execute(`UPDATE ${tablas.twoFactor} SET intentos = intentos + 1 WHERE id = ?`, [record.id]);
+      isValid = true;
     }
     
-    await db.execute(
-      `UPDATE ${tablas.usuarios} SET two_factor_verified = 1 WHERE usuarioid = ?`,
-      [user.usuarioid]
-    );
-    
-    await db.execute(
-      `UPDATE ${tablas.twoFactor} SET usado = 1 WHERE usuarioid = ? AND tipo_usuario = ? AND usado = 0 AND LENGTH(codigo) = 6`,
-      [user.usuarioid, tipo]
-    );
-    
-    const token = jwt.sign(
-      { usuarioid: user.usuarioid, email: user.email, tipo: tipo, twoFactorVerified: true },
-      process.env.JWT_SECRET,
-      { expiresIn: process.env.JWT_EXPIRES_IN }
-    );
-    
-    return res.json({
-      success: true,
-      message: "Código verificado correctamente",
-      token,
-      two_factor_verified: true
-    });
+    if (isValid) {
+      await db.execute(
+        `UPDATE ${tablas.usuarios} SET two_factor_verified = 1 WHERE usuarioid = ?`,
+        [user.usuarioid]
+      );
+      
+      await db.execute(
+        `UPDATE ${tablas.twoFactor} SET usado = 1 WHERE usuarioid = ? AND tipo_usuario = ? AND LENGTH(codigo) = 6 AND usado = 0`,
+        [user.usuarioid, tipo]
+      );
+      
+      const jwt = require("jsonwebtoken");
+      const token = jwt.sign(
+        { usuarioid: user.usuarioid, email: user.email, tipo: tipo, twoFactorVerified: true },
+        process.env.JWT_SECRET,
+        { expiresIn: process.env.JWT_EXPIRES_IN }
+      );
+      
+      return res.json({
+        success: true,
+        message: "Código verificado correctamente",
+        token,
+        two_factor_verified: true
+      });
+    }
     
   } catch (error) {
     console.error("Error en verifyTwoFactorCode:", error);

@@ -4,6 +4,8 @@ const jwt = require("jsonwebtoken");
 const crypto = require("crypto");
 const { sendWelcomeEmail, sendLoginNotificationEmail, sendPasswordResetEmail } = require("../utils/email.utils");
 const { getMexicoISO } = require("../utils/date.utils");
+const { generateTwoFactorCode } = require("../utils/twoFactor.utils");
+const { sendTwoFactorCodeEmail } = require("../utils/email2fa.utils");
 
 const getTablasByTipo = (tipo) => {
   if (tipo === 'cliente') {
@@ -11,6 +13,7 @@ const getTablasByTipo = (tipo) => {
       usuarios: 'usuarios_clientes',
       tokens: 'password_reset_tokens_clientes',
       blacklist: 'tokens_blacklist_clientes',
+      twoFactor: 'two_factor_auth',
       rolid: 4
     };
   }
@@ -18,13 +21,14 @@ const getTablasByTipo = (tipo) => {
     usuarios: 'usuarios',
     tokens: 'password_reset_tokens',
     blacklist: 'tokens_blacklist',
+    twoFactor: 'two_factor_auth',
     rolid: null
   };
 };
 
 exports.login = async (req, res) => {
   try {
-    const { email, password, ip_ultimo_login, tipo = 'admin' } = req.body;
+    const { email, password, ip_ultimo_login, tipo = 'admin', two_factor_code, backup_code } = req.body;
     const tablas = getTablasByTipo(tipo);
 
     if (!email || !password) {
@@ -45,13 +49,111 @@ exports.login = async (req, res) => {
     }
 
     const user = rows[0];
-
     const passwordMatch = await bcrypt.compare(password, user.password);
 
     if (!passwordMatch) {
       return res.status(401).json({
         error: "Usuario o contraseña incorrectos"
       });
+    }
+
+    if (user.two_factor_enabled === 1 && user.two_factor_verified !== 1) {
+      if (!two_factor_code && !backup_code) {
+        const codigo = generateTwoFactorCode();
+        const expiracion = new Date();
+        expiracion.setMinutes(expiracion.getMinutes() + 10);
+
+        await db.execute(
+          `DELETE FROM ${tablas.twoFactor} WHERE usuarioid = ? AND tipo_usuario = ? AND usado = 0 AND LENGTH(codigo) = 6`,
+          [user.usuarioid, tipo]
+        );
+
+        await db.execute(
+          `INSERT INTO ${tablas.twoFactor} (usuarioid, tipo_usuario, codigo, expiracion, usado) VALUES (?, ?, ?, ?, 0)`,
+          [user.usuarioid, tipo, codigo, expiracion]
+        );
+
+        try {
+          await sendTwoFactorCodeEmail(user.email, user.nombre, codigo);
+        } catch (emailError) {
+          console.error("Error enviando código 2FA:", emailError);
+        }
+
+        return res.status(403).json({
+          error: "Se requiere código de verificación",
+          requires_two_factor: true,
+          two_factor_enabled: true,
+          message: "Se ha enviado un código de verificación a tu correo electrónico"
+        });
+      }
+
+      const isBackup = !!backup_code;
+      const codigoIngresado = two_factor_code || backup_code;
+      let isValid = false;
+
+      if (isBackup) {
+        const [codes] = await db.execute(
+          `SELECT id, codigo, usado FROM ${tablas.twoFactor} WHERE usuarioid = ? AND tipo_usuario = ? AND usado = 0 AND LENGTH(codigo) > 6`,
+          [user.usuarioid, tipo]
+        );
+
+        for (const code of codes) {
+          const match = await bcrypt.compare(codigoIngresado, code.codigo);
+          if (match) {
+            isValid = true;
+            await db.execute(`UPDATE ${tablas.twoFactor} SET usado = 1 WHERE id = ?`, [code.id]);
+            break;
+          }
+        }
+
+        if (!isValid) {
+          return res.status(401).json({ error: "Código de respaldo inválido o ya utilizado" });
+        }
+      } else {
+        if (!/^\d{6}$/.test(codigoIngresado)) {
+          return res.status(400).json({ error: "Código inválido. Debe ser de 6 dígitos." });
+        }
+
+        const [codes] = await db.execute(
+          `SELECT id, codigo, expiracion, usado, intentos FROM ${tablas.twoFactor} 
+           WHERE usuarioid = ? AND tipo_usuario = ? AND usado = 0 AND codigo = ? 
+           ORDER BY id DESC LIMIT 1`,
+          [user.usuarioid, tipo, codigoIngresado]
+        );
+
+        if (codes.length === 0) {
+          return res.status(401).json({ error: "Código inválido" });
+        }
+
+        const record = codes[0];
+
+        if (new Date() > new Date(record.expiracion)) {
+          await db.execute(`UPDATE ${tablas.twoFactor} SET usado = 1 WHERE id = ?`, [record.id]);
+          return res.status(401).json({ error: "El código ha expirado. Solicita uno nuevo." });
+        }
+
+        if (record.intentos >= 5) {
+          await db.execute(`UPDATE ${tablas.twoFactor} SET usado = 1 WHERE id = ?`, [record.id]);
+          return res.status(401).json({ error: "Demasiados intentos. Solicita un nuevo código." });
+        }
+
+        await db.execute(`UPDATE ${tablas.twoFactor} SET intentos = intentos + 1 WHERE id = ?`, [record.id]);
+        isValid = true;
+      }
+
+      if (isValid) {
+        await db.execute(
+          `UPDATE ${tablas.usuarios} SET two_factor_verified = 1 WHERE usuarioid = ?`,
+          [user.usuarioid]
+        );
+        
+        await db.execute(
+          `UPDATE ${tablas.twoFactor} SET usado = 1 WHERE usuarioid = ? AND tipo_usuario = ? AND LENGTH(codigo) = 6 AND usado = 0`,
+          [user.usuarioid, tipo]
+        );
+      } else {
+        return res.status(401).json({ error: "Código de verificación inválido" });
+      }
     }
 
     const ultimo_login = getMexicoISO();
@@ -68,7 +170,8 @@ exports.login = async (req, res) => {
         usuarioid: user.usuarioid,
         email: user.email,
         rolid: user.rolid,
-        tipo: tipo
+        tipo: tipo,
+        twoFactorVerified: user.two_factor_enabled === 1
       },
       process.env.JWT_SECRET,
       {
@@ -103,6 +206,7 @@ exports.login = async (req, res) => {
         ip_ultimo_login,
         tipo
       },
+      two_factor_enabled: user.two_factor_enabled === 1,
       ...(tipo === 'cliente' && { cliente: infoAdicional })
     });
 
@@ -159,8 +263,8 @@ exports.registerCliente = async (req, res) => {
 
     const [result] = await db.execute(
       `INSERT INTO usuarios_clientes 
-       (nombre, email, password, rolid, activo, creado, ip_ultimo_login) 
-       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+       (nombre, email, password, rolid, activo, creado, ip_ultimo_login, two_factor_enabled, two_factor_verified) 
+       VALUES (?, ?, ?, ?, ?, ?, ?, 0, 0)`,
       [nombre, email, hashedPassword, 4, 1, fecha_creacion, ip_registro || null]
     );
 
@@ -189,7 +293,8 @@ exports.registerCliente = async (req, res) => {
         usuarioid: usuarioid,
         email: email,
         rolid: 4,
-        tipo: 'cliente'
+        tipo: 'cliente',
+        twoFactorVerified: false
       },
       process.env.JWT_SECRET,
       {
@@ -213,7 +318,9 @@ exports.registerCliente = async (req, res) => {
         rolid: 4,
         activo: 1,
         creado: fecha_creacion,
-        tipo: 'cliente'
+        tipo: 'cliente',
+        two_factor_enabled: 0,
+        two_factor_verified: 0
       }
     });
 
@@ -263,8 +370,8 @@ exports.register = async (req, res) => {
 
     const [result] = await db.execute(
       `INSERT INTO usuarios 
-       (nombre, email, password, rolid, activo, creado, ip_ultimo_login) 
-       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+       (nombre, email, password, rolid, activo, creado, ip_ultimo_login, two_factor_enabled, two_factor_verified) 
+       VALUES (?, ?, ?, ?, ?, ?, ?, 0, 0)`,
       [nombre, email, hashedPassword, 3, 1, fecha_creacion, ip_registro || null]
     );
 
@@ -273,7 +380,8 @@ exports.register = async (req, res) => {
         usuarioid: result.insertId,
         email: email,
         rolid: 3,
-        tipo: 'admin'
+        tipo: 'admin',
+        twoFactorVerified: false
       },
       process.env.JWT_SECRET,
       {
@@ -297,7 +405,9 @@ exports.register = async (req, res) => {
         rolid: 3,
         activo: 1,
         creado: fecha_creacion,
-        tipo: 'admin'
+        tipo: 'admin',
+        two_factor_enabled: 0,
+        two_factor_verified: 0
       }
     });
 
@@ -358,7 +468,7 @@ exports.getProfile = async (req, res) => {
     if (tipo === 'cliente') {
       query = `
         SELECT u.usuarioid, u.nombre, u.email, u.activo, u.creado, 
-               u.ultimo_login, u.ip_ultimo_login, u.rolid,
+               u.ultimo_login, u.ip_ultimo_login, u.rolid, u.two_factor_enabled, u.two_factor_verified,
                c.*
         FROM ${tablas.usuarios} u
         LEFT JOIN clientes c ON u.usuarioid = c.usuarioid
@@ -367,7 +477,7 @@ exports.getProfile = async (req, res) => {
     } else {
       query = `
         SELECT u.usuarioid, u.nombre, u.email, u.activo, u.creado, 
-               u.ultimo_login, u.ip_ultimo_login, u.rolid,
+               u.ultimo_login, u.ip_ultimo_login, u.rolid, u.two_factor_enabled, u.two_factor_verified,
                r.nombre as rol_nombre
         FROM ${tablas.usuarios} u
         LEFT JOIN roles r ON u.rolid = r.rolid
@@ -469,7 +579,6 @@ exports.changePassword = async (req, res) => {
     }
 
     const user = rows[0];
-
     const passwordMatch = await bcrypt.compare(password_actual, user.password);
 
     if (!passwordMatch) {
@@ -521,7 +630,6 @@ exports.forgotPassword = async (req, res) => {
     }
 
     const user = users[0];
-
     const resetToken = crypto.randomBytes(32).toString("hex");
     
     const expiracion = new Date();
@@ -596,7 +704,6 @@ exports.resetPassword = async (req, res) => {
     }
 
     const resetToken = tokens[0];
-
     const saltRounds = 10;
     const hashedPassword = await bcrypt.hash(new_password, saltRounds);
 
@@ -624,159 +731,5 @@ exports.resetPassword = async (req, res) => {
     return res.status(500).json({
       error: "Error al restablecer contraseña"
     });
-  }
-};
-
-exports.loginWithTwoFactor = async (req, res) => {
-  try {
-    const { email, password, ip_ultimo_login, tipo = 'admin', two_factor_code, backup_code } = req.body;
-    const tablas = getTablasByTipo(tipo);
-    const twoFactorTablas = { usuarios: tablas.usuarios, twoFactor: tablas.twoFactor || 'two_factor_auth' };
-
-    if (!email || !password) {
-      return res.status(400).json({ error: "Email y password son requeridos" });
-    }
-
-    const [rows] = await db.execute(
-      `SELECT * FROM ${tablas.usuarios} WHERE email = ? AND activo = 1 LIMIT 1`,
-      [email]
-    );
-
-    if (rows.length === 0) {
-      return res.status(401).json({ error: "Usuario o contraseña incorrectos" });
-    }
-
-    const user = rows[0];
-    const passwordMatch = await bcrypt.compare(password, user.password);
-
-    if (!passwordMatch) {
-      return res.status(401).json({ error: "Usuario o contraseña incorrectos" });
-    }
-
-    if (user.two_factor_enabled === 1) {
-      if (!two_factor_code && !backup_code) {
-        return res.status(403).json({
-          error: "Se requiere código de verificación",
-          requires_two_factor: true,
-          two_factor_enabled: true
-        });
-      }
-
-      const isBackup = !!backup_code;
-      const codigo = two_factor_code || backup_code;
-
-      let query, params;
-
-      if (isBackup) {
-        const [codes] = await db.execute(
-          `SELECT id, codigo, usado FROM ${twoFactorTablas.twoFactor} WHERE usuarioid = ? AND tipo_usuario = ? AND usado = 0`,
-          [user.usuarioid, tipo]
-        );
-
-        let validCode = null;
-        for (const code of codes) {
-          const isValid = await bcrypt.compare(codigo, code.codigo);
-          if (isValid) {
-            validCode = code;
-            break;
-          }
-        }
-
-        if (!validCode) {
-          return res.status(401).json({ error: "Código de respaldo inválido o ya utilizado" });
-        }
-
-        await db.execute(
-          `UPDATE ${twoFactorTablas.twoFactor} SET usado = 1 WHERE id = ?`,
-          [validCode.id]
-        );
-      } else {
-        if (!/^\d{6}$/.test(codigo)) {
-          return res.status(400).json({ error: "Código inválido. Debe ser de 6 dígitos." });
-        }
-
-        const [codes] = await db.execute(
-          `SELECT id, codigo, expiracion, usado, intentos FROM ${twoFactorTablas.twoFactor} 
-           WHERE usuarioid = ? AND tipo_usuario = ? AND usado = 0 AND codigo = ? 
-           ORDER BY id DESC LIMIT 1`,
-          [user.usuarioid, tipo, codigo]
-        );
-
-        if (codes.length === 0) {
-          return res.status(401).json({ error: "Código inválido" });
-        }
-
-        const twoFactorRecord = codes[0];
-
-        if (new Date() > new Date(twoFactorRecord.expiracion)) {
-          await db.execute(
-            `UPDATE ${twoFactorTablas.twoFactor} SET usado = 1 WHERE id = ?`,
-            [twoFactorRecord.id]
-          );
-          return res.status(401).json({ error: "El código ha expirado. Solicita uno nuevo." });
-        }
-
-        if (twoFactorRecord.intentos >= 5) {
-          await db.execute(
-            `UPDATE ${twoFactorTablas.twoFactor} SET usado = 1 WHERE id = ?`,
-            [twoFactorRecord.id]
-          );
-          return res.status(401).json({ error: "Demasiados intentos. Solicita un nuevo código." });
-        }
-
-        await db.execute(
-          `UPDATE ${twoFactorTablas.twoFactor} SET intentos = intentos + 1 WHERE id = ?`,
-          [twoFactorRecord.id]
-        );
-      }
-
-      await db.execute(
-        `UPDATE ${twoFactorTablas.usuarios} SET two_factor_verified = 1 WHERE usuarioid = ?`,
-        [user.usuarioid]
-      );
-
-      await db.execute(
-        `UPDATE ${twoFactorTablas.twoFactor} SET usado = 1 WHERE usuarioid = ? AND tipo_usuario = ? AND usado = 0 AND LENGTH(codigo) = 6`,
-        [user.usuarioid, tipo]
-      );
-    }
-
-    const ultimo_login = getMexicoISO();
-
-    await db.execute(
-      `UPDATE ${tablas.usuarios} SET ultimo_login = ?, ip_ultimo_login = ? WHERE usuarioid = ?`,
-      [ultimo_login, ip_ultimo_login, user.usuarioid]
-    );
-
-    const token = jwt.sign(
-      { usuarioid: user.usuarioid, email: user.email, rolid: user.rolid, tipo: tipo, twoFactorVerified: user.two_factor_enabled === 1 },
-      process.env.JWT_SECRET,
-      { expiresIn: process.env.JWT_EXPIRES_IN }
-    );
-
-    delete user.password;
-
-    let infoAdicional = {};
-    if (tipo === 'cliente') {
-      const [clienteInfo] = await db.execute("SELECT * FROM clientes WHERE usuarioid = ?", [user.usuarioid]);
-      if (clienteInfo.length > 0) infoAdicional = clienteInfo[0];
-    }
-
-    try {
-      await sendLoginNotificationEmail(user.email, user.nombre, ip_ultimo_login, tipo);
-    } catch (emailError) {
-      console.error("Error al enviar notificación de login:", emailError);
-    }
-
-    return res.json({
-      token,
-      two_factor_enabled: user.two_factor_enabled === 1,
-      usuario: { ...user, ultimo_login, ip_ultimo_login, tipo },
-      ...(tipo === 'cliente' && { cliente: infoAdicional })
-    });
-
-  } catch (error) {
-    console.error(error);
-    return res.status(500).json({ error: "Error en login" });
   }
 };
