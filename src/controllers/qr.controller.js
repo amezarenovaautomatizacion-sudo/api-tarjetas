@@ -8,7 +8,7 @@ const generateCustomQR = async (req, res) => {
       return res.status(400).json({ error: "URL es requerida" });
     }
 
-    const urlPattern = /^(https?:\/\/)?([\da-z\.-]+)\.([a-z\.]{2,6})([\/\w \.-]*)*\/?$/;
+    const urlPattern = /^(https?:\/\/)?([\da-z\.-]+)\.([a-z\.]{2,})([\/\w \.-]*)*\/?(\?[^#]*)?(#.*)?$/i;
     if (!urlPattern.test(url)) {
       return res.status(400).json({ error: "URL no válida" });
     }
