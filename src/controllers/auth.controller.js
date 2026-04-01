@@ -30,7 +30,7 @@ exports.login = async (req, res) => {
   try {
     const { email, password, ip_ultimo_login, tipo = 'admin', two_factor_code, backup_code } = req.body;
     const tablas = getTablasByTipo(tipo);
-    const twoFactorTable = tipo === 'cliente' ? 'two_factor_auth' : 'two_factor_auth';
+    const twoFactorTable = 'two_factor_auth';
 
     if (!email || !password) {
       return res.status(400).json({
@@ -58,7 +58,9 @@ exports.login = async (req, res) => {
       });
     }
 
-    if (user.two_factor_enabled === 1 && user.two_factor_verified !== 1) {
+    // VERIFICACIÓN DE 2FA - RESETEA two_factor_verified a 0 si no hay código
+    if (user.two_factor_enabled === 1) {
+      // Si no se envió código, requerirlo
       if (!two_factor_code && !backup_code) {
         const codigo = generateTwoFactorCode();
         const expiracion = new Date();
@@ -76,7 +78,7 @@ exports.login = async (req, res) => {
 
         try {
           await sendTwoFactorCodeEmail(user.email, user.nombre, codigo);
-          console.log('Código 2FA enviado a:', user.email, codigo);
+          console.log('Código 2FA enviado a:', user.email);
         } catch (emailError) {
           console.error("Error enviando código 2FA:", emailError);
         }
@@ -85,10 +87,12 @@ exports.login = async (req, res) => {
           error: "Se requiere código de verificación",
           requires_two_factor: true,
           two_factor_enabled: true,
+          two_factor_verified: false,
           message: "Se ha enviado un código de verificación a tu correo electrónico"
         });
       }
 
+      // Verificar el código
       const isBackup = !!backup_code;
       const codigoIngresado = two_factor_code || backup_code;
       let isValid = false;
@@ -143,21 +147,23 @@ exports.login = async (req, res) => {
         isValid = true;
       }
 
-      if (isValid) {
-        await db.execute(
-          `UPDATE ${tablas.usuarios} SET two_factor_verified = 1 WHERE usuarioid = ?`,
-          [user.usuarioid]
-        );
-        
-        await db.execute(
-          `UPDATE ${twoFactorTable} SET usado = 1 WHERE usuarioid = ? AND tipo_usuario = ? AND LENGTH(codigo) = 6 AND usado = 0`,
-          [user.usuarioid, tipo]
-        );
-      } else {
+      if (!isValid) {
         return res.status(401).json({ error: "Código de verificación inválido" });
       }
+
+      // Código válido: marcar como verificado para ESTA sesión
+      await db.execute(
+        `UPDATE ${tablas.usuarios} SET two_factor_verified = 1 WHERE usuarioid = ?`,
+        [user.usuarioid]
+      );
+
+      await db.execute(
+        `UPDATE ${twoFactorTable} SET usado = 1 WHERE usuarioid = ? AND tipo_usuario = ? AND LENGTH(codigo) = 6 AND usado = 0`,
+        [user.usuarioid, tipo]
+      );
     }
 
+    // Actualizar último login
     const ultimo_login = getMexicoISO();
 
     await db.execute(
@@ -209,6 +215,7 @@ exports.login = async (req, res) => {
         tipo
       },
       two_factor_enabled: user.two_factor_enabled === 1,
+      two_factor_verified: true,
       ...(tipo === 'cliente' && { cliente: infoAdicional })
     });
 
@@ -427,6 +434,15 @@ exports.logout = async (req, res) => {
     const token = authHeader && authHeader.split(" ")[1];
     const tipo = req.user?.tipo || 'admin';
     const tablas = getTablasByTipo(tipo);
+
+    // RESETEAR two_factor_verified a 0 al cerrar sesión
+    if (req.user?.usuarioid) {
+      await db.execute(
+        `UPDATE ${tablas.usuarios} SET two_factor_verified = 0 WHERE usuarioid = ?`,
+        [req.user.usuarioid]
+      );
+      console.log(`[LOGOUT] two_factor_verified reset para usuario ${req.user.usuarioid}`);
+    }
 
     if (!token) {
       return res.status(400).json({

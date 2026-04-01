@@ -201,7 +201,7 @@ exports.verifyTwoFactorCode = async (req, res) => {
       
       const record = codes[0];
       
-      if (isCodeExpired(record.expiracion)) {
+      if (new Date() > new Date(record.expiracion)) {
         await db.execute(`UPDATE ${tablas.twoFactor} SET usado = 1 WHERE id = ?`, [record.id]);
         return res.status(401).json({ error: "El código ha expirado. Solicita uno nuevo." });
       }
@@ -216,6 +216,7 @@ exports.verifyTwoFactorCode = async (req, res) => {
     }
     
     if (isValid) {
+      // Marcar como verificado en la base de datos
       await db.execute(
         `UPDATE ${tablas.usuarios} SET two_factor_verified = 1 WHERE usuarioid = ?`,
         [user.usuarioid]
@@ -226,17 +227,9 @@ exports.verifyTwoFactorCode = async (req, res) => {
         [user.usuarioid, tipo]
       );
       
-      const jwt = require("jsonwebtoken");
-      const token = jwt.sign(
-        { usuarioid: user.usuarioid, email: user.email, tipo: tipo, twoFactorVerified: true },
-        process.env.JWT_SECRET,
-        { expiresIn: process.env.JWT_EXPIRES_IN }
-      );
-      
       return res.json({
         success: true,
         message: "Código verificado correctamente",
-        token,
         two_factor_verified: true
       });
     }
