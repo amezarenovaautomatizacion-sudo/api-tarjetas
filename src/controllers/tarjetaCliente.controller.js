@@ -126,7 +126,7 @@ exports.getMisTarjetas = async (req, res) => {
     const [countResult] = await db.execute(countQuery, countParams);
     const totalCount = countResult[0].total;
 
-    // Construir query principal
+    // Construir query principal - AÑADIDO el campo visitas
     let query = `
       SELECT 
         tc.tarjetaclienteid, 
@@ -136,6 +136,7 @@ exports.getMisTarjetas = async (req, res) => {
         tc.creado, 
         tc.actualizado,
         tc.slug,
+        tc.visitas,  // ← CAMPO AGREGADO
         p.nombre as plantilla_nombre, 
         p.plantillaid, 
         p.preview_image
@@ -178,8 +179,14 @@ exports.getMisTarjetas = async (req, res) => {
     const [tarjetas] = await db.execute(query, params);
     console.log("Tarjetas encontradas:", tarjetas.length);
 
+    // Transformar los datos para incluir visitas_visibles según visibilidad
+    const tarjetasConVisibilidad = tarjetas.map(tarjeta => ({
+      ...tarjeta,
+      visitas_visibles: tarjeta.visibilidad === 'publico' ? (tarjeta.visitas || 0) : 0
+    }));
+
     return res.json({
-      tarjetas: tarjetas,
+      tarjetas: tarjetasConVisibilidad,
       paginacion: {
         pagina: paginaNum,
         limite: limiteNum,
