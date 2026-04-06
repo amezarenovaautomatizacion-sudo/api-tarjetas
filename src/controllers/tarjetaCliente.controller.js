@@ -126,7 +126,7 @@ exports.getMisTarjetas = async (req, res) => {
     const [countResult] = await db.execute(countQuery, countParams);
     const totalCount = countResult[0].total;
 
-    // Construir query principal - AÑADIDO el campo visitas
+    // Construir query principal
     let query = `
       SELECT 
         tc.tarjetaclienteid, 
@@ -136,7 +136,7 @@ exports.getMisTarjetas = async (req, res) => {
         tc.creado, 
         tc.actualizado,
         tc.slug,
-        tc.visitas,  // ← CAMPO AGREGADO
+        tc.visitas,
         p.nombre as plantilla_nombre, 
         p.plantillaid, 
         p.preview_image
