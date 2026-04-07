@@ -353,13 +353,16 @@ exports.getDashboardStats = async (req, res) => {
 
 exports.verificarLimitesTarjetas = async (usuarioid, tipo = 'cliente') => {
   try {
+    // ✅ CORREGIDO: Asegurar que tipo sea string válido
+    const tipoUsuario = tipo || 'cliente';
+    
     const [suscripcion] = await db.execute(
       `SELECT ts.max_tarjetas
        FROM suscripciones_usuarios s
        INNER JOIN tipos_suscripcion ts ON s.tiposuscripcionid = ts.tiposuscripcionid
        WHERE s.usuarioid = ? AND s.tipo_usuario = ? AND s.estado = 'activa'
        ORDER BY s.suscripcionid DESC LIMIT 1`,
-      [usuarioid, tipo]
+      [usuarioid, tipoUsuario]  // ✅ Ambos parámetros explícitos
     );
 
     let limiteTarjetas = 3;
@@ -389,99 +392,29 @@ exports.verificarLimitesTarjetas = async (usuarioid, tipo = 'cliente') => {
 
 exports.getAllSuscripciones = async (req, res) => {
   try {
-    const { estado, tipo_usuario, limite = 50, pagina = 1 } = req.query;
-    
-    const limiteNum = parseInt(limite);
-    const paginaNum = parseInt(pagina);
-    const offset = (paginaNum - 1) * limiteNum;
-
-    // Construir la consulta base
-    let query = `
+    const [suscripciones] = await db.execute(`
       SELECT 
-        s.suscripcionid,
-        s.usuarioid,
-        s.tipo_usuario,
-        s.tiposuscripcionid,
-        s.fecha_inicio,
-        s.fecha_fin,
-        s.fecha_ultima_renovacion,
-        s.estado,
-        s.automatico_renovar,
-        s.ultimo_pago_id,
-        s.notas,
-        s.creado,
-        s.actualizado,
-        s.recordatorio_enviado,
+        s.*,
         ts.nombre as plan_nombre,
-        ts.precio_centavos,
-        ts.duracion_dias,
-        ts.max_tarjetas,
-        COALESCE(uc.nombre, u.nombre, 'Usuario') as usuario_nombre,
-        COALESCE(uc.email, u.email, 'Sin email') as usuario_email
+        uc.nombre as usuario_nombre,
+        uc.email as usuario_email
       FROM suscripciones_usuarios s
-      INNER JOIN tipos_suscripcion ts ON s.tiposuscripcionid = ts.tiposuscripcionid
-      LEFT JOIN usuarios_clientes uc ON s.usuarioid = uc.usuarioid AND s.tipo_usuario = 'cliente'
-      LEFT JOIN usuarios u ON s.usuarioid = u.usuarioid AND s.tipo_usuario = 'admin'
-      WHERE 1=1
-    `;
+      LEFT JOIN tipos_suscripcion ts ON s.tiposuscripcionid = ts.tiposuscripcionid
+      LEFT JOIN usuarios_clientes uc ON s.usuarioid = uc.usuarioid
+      ORDER BY s.suscripcionid DESC
+    `);
     
-    const params = [];
-
-    if (estado) {
-      query += " AND s.estado = ?";
-      params.push(estado);
-    }
-    
-    if (tipo_usuario) {
-      query += " AND s.tipo_usuario = ?";
-      params.push(tipo_usuario);
-    }
-
-    // IMPORTANTE: Añadir ORDER BY antes de LIMIT
-    query += " ORDER BY s.suscripcionid DESC LIMIT ? OFFSET ?";
-    params.push(limiteNum, offset);
-
-    console.log('[DEBUG] SQL Query:', query);
-    console.log('[DEBUG] Params:', params);
-    console.log('[DEBUG] Params count:', params.length);
-
-    // Ejecutar la consulta principal
-    const [suscripciones] = await db.execute(query, params);
-
-    // Query para el total (sin LIMIT/OFFSET)
-    let countQuery = "SELECT COUNT(*) as total FROM suscripciones_usuarios s WHERE 1=1";
-    const countParams = [];
-    
-    if (estado) {
-      countQuery += " AND s.estado = ?";
-      countParams.push(estado);
-    }
-    
-    if (tipo_usuario) {
-      countQuery += " AND s.tipo_usuario = ?";
-      countParams.push(tipo_usuario);
-    }
-
-    const [total] = await db.execute(countQuery, countParams);
-
     return res.json({
-      suscripciones: suscripciones || [],
-      paginacion: {
-        pagina: paginaNum,
-        limite: limiteNum,
-        total: total[0]?.total || 0,
-        paginas: Math.ceil((total[0]?.total || 0) / limiteNum)
-      }
+      success: true,
+      total: suscripciones.length,
+      suscripciones: suscripciones
     });
     
   } catch (error) {
-    console.error("Error DETALLADO en getAllSuscripciones:", error);
-    console.error("Error message:", error.message);
-    console.error("Error stack:", error.stack);
+    console.error("Error en getAllSuscripciones:", error);
     return res.status(500).json({ 
       error: "Error al obtener suscripciones",
-      detalle: error.message,
-      sql: error.sql
+      detalle: error.message
     });
   }
 };
