@@ -26,6 +26,82 @@ const getTablasByTipo = (tipo) => {
   };
 };
 
+const verificarYActualizarSuscripcion = async (usuarioid, tipo) => {
+  try {
+    if (tipo !== 'cliente') {
+      return { tiene_suscripcion: true, mensaje: 'Admin no requiere suscripción' };
+    }
+
+    const [suscripciones] = await db.execute(
+      `SELECT suscripcionid, fecha_fin, estado, automatico_renovar 
+       FROM suscripciones_usuarios 
+       WHERE usuarioid = ? AND tipo_usuario = ? AND estado = 'activa'
+       ORDER BY fecha_fin ASC LIMIT 1`,
+      [usuarioid, tipo]
+    );
+
+    if (suscripciones.length === 0) {
+      return { 
+        tiene_suscripcion: false, 
+        mensaje: 'No tienes una suscripción activa',
+        necesita_renovar: true
+      };
+    }
+
+    const suscripcion = suscripciones[0];
+    const fechaFin = new Date(suscripcion.fecha_fin);
+    const hoy = new Date();
+    hoy.setHours(0, 0, 0, 0);
+
+    if (fechaFin < hoy) {
+      await db.execute(
+        `UPDATE suscripciones_usuarios 
+         SET estado = 'vencida', actualizado = NOW(),
+             notas = CONCAT(IFNULL(notas, ''), ' | Vencida al intentar login el ', CURDATE())
+         WHERE suscripcionid = ?`,
+        [suscripcion.suscripcionid]
+      );
+
+      await db.execute(
+        `INSERT INTO historial_suscripciones 
+         (suscripcionid, usuarioid, tipo_usuario, tiposuscripcionid, 
+          fecha_inicio, fecha_fin, motivo, estado_anterior, estado_nuevo, fecha_cambio)
+         SELECT suscripcionid, usuarioid, tipo_usuario, tiposuscripcionid,
+                fecha_inicio, fecha_fin, 'Vencida al intentar login',
+                'activa', 'vencida', NOW()
+         FROM suscripciones_usuarios
+         WHERE suscripcionid = ?`,
+        [suscripcion.suscripcionid]
+      );
+
+      return { 
+        tiene_suscripcion: false, 
+        mensaje: `Tu suscripción venció el ${suscripcion.fecha_fin}. Por favor renueva para continuar.`,
+        necesita_renovar: true,
+        fecha_vencimiento: suscripcion.fecha_fin
+      };
+    }
+
+    const diffTime = fechaFin - hoy;
+    const diasRestantes = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+
+    return { 
+      tiene_suscripcion: true, 
+      mensaje: `Suscripción activa. Te quedan ${diasRestantes} días.`,
+      dias_restantes: diasRestantes,
+      fecha_vencimiento: suscripcion.fecha_fin
+    };
+
+  } catch (error) {
+    console.error('Error verificando suscripción:', error);
+    return { 
+      tiene_suscripcion: false, 
+      mensaje: 'Error al verificar suscripción',
+      error: error.message
+    };
+  }
+};
+
 exports.login = async (req, res) => {
   try {
     const { email, password, ip_ultimo_login, tipo = 'admin', two_factor_code, backup_code } = req.body;
@@ -58,9 +134,27 @@ exports.login = async (req, res) => {
       });
     }
 
-    // VERIFICACIÓN DE 2FA - RESETEA two_factor_verified a 0 si no hay código
+    if (tipo === 'cliente') {
+      const verificacion = await verificarYActualizarSuscripcion(user.usuarioid, tipo);
+      
+      if (!verificacion.tiene_suscripcion) {
+        return res.status(403).json({
+          error: "Acceso denegado",
+          requires_subscription: true,
+          subscription_expired: true,
+          message: verificacion.mensaje,
+          fecha_vencimiento: verificacion.fecha_vencimiento,
+          necesita_renovar: true
+        });
+      }
+      
+      user.suscripcion_info = {
+        dias_restantes: verificacion.dias_restantes,
+        fecha_vencimiento: verificacion.fecha_vencimiento
+      };
+    }
+
     if (user.two_factor_enabled === 1) {
-      // Si no se envió código, requerirlo
       if (!two_factor_code && !backup_code) {
         const codigo = generateTwoFactorCode();
         const expiracion = new Date();
@@ -92,7 +186,6 @@ exports.login = async (req, res) => {
         });
       }
 
-      // Verificar el código
       const isBackup = !!backup_code;
       const codigoIngresado = two_factor_code || backup_code;
       let isValid = false;
@@ -151,7 +244,6 @@ exports.login = async (req, res) => {
         return res.status(401).json({ error: "Código de verificación inválido" });
       }
 
-      // Código válido: marcar como verificado para ESTA sesión
       await db.execute(
         `UPDATE ${tablas.usuarios} SET two_factor_verified = 1 WHERE usuarioid = ?`,
         [user.usuarioid]
@@ -163,7 +255,6 @@ exports.login = async (req, res) => {
       );
     }
 
-    // Actualizar último login
     const ultimo_login = getMexicoISO();
 
     await db.execute(
@@ -216,7 +307,8 @@ exports.login = async (req, res) => {
       },
       two_factor_enabled: user.two_factor_enabled === 1,
       two_factor_verified: true,
-      ...(tipo === 'cliente' && { cliente: infoAdicional })
+      ...(tipo === 'cliente' && { cliente: infoAdicional }),
+      suscripcion: tipo === 'cliente' ? user.suscripcion_info : null
     });
 
   } catch (error) {
@@ -435,7 +527,6 @@ exports.logout = async (req, res) => {
     const tipo = req.user?.tipo || 'admin';
     const tablas = getTablasByTipo(tipo);
 
-    // RESETEAR two_factor_verified a 0 al cerrar sesión
     if (req.user?.usuarioid) {
       await db.execute(
         `UPDATE ${tablas.usuarios} SET two_factor_verified = 0 WHERE usuarioid = ?`,
