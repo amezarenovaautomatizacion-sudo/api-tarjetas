@@ -1,6 +1,7 @@
 const db = require("../config/db");
 const slugify = require("slugify");
 const { getMexicoISO } = require("../utils/date.utils");
+const suscripcionController = require("./suscripcion.controller");
 
 const renderPlantillaConDatos = (htmlContent, datos) => {
   let htmlRenderizado = htmlContent;
@@ -14,12 +15,26 @@ const renderPlantillaConDatos = (htmlContent, datos) => {
 exports.createTarjeta = async (req, res) => {
   try {
     const usuarioid = req.user.usuarioid;
+    const tipo = req.user.tipo || 'cliente';
     const { plantillaid, nombre_tarjeta, datos, visibilidad = 'privado' } = req.body;
+
+    // VERIFICAR LÍMITES DE SUSCRIPCIÓN
+    const limites = await suscripcionController.verificarLimitesTarjetas(usuarioid, tipo);
+    
+    if (!limites.puede_crear) {
+      return res.status(403).json({
+        error: "Límite de tarjetas alcanzado",
+        mensaje: limites.mensaje,
+        limite: limites.limite,
+        actual: limites.total_actual
+      });
+    }
 
     if (!plantillaid || !nombre_tarjeta || !datos) {
       return res.status(400).json({ error: "Faltan campos requeridos: plantillaid, nombre_tarjeta, datos" });
     }
 
+    // Resto del código original...
     const plantillaIdNum = parseInt(plantillaid);
     if (isNaN(plantillaIdNum)) {
       return res.status(400).json({ error: "plantillaid debe ser un número válido" });
@@ -68,7 +83,12 @@ exports.createTarjeta = async (req, res) => {
 
     return res.status(201).json({
       message: "Tarjeta creada exitosamente",
-      tarjetaclienteid: result.insertId
+      tarjetaclienteid: result.insertId,
+      limites_restantes: {
+        usadas: limites.total_actual + 1,
+        limite: limites.limite,
+        disponibles: limites.limite - (limites.total_actual + 1)
+      }
     });
 
   } catch (error) {
