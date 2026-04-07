@@ -17,5 +17,9 @@ router.get("/cliente/dashboard", authenticateToken, authorizeCliente, requireTwo
 // Rutas protegidas para admin
 router.get("/admin/suscripciones", authenticateToken, authorizeRole([1]), suscripcionController.getAllSuscripciones);
 router.post("/admin/suscripciones/:suscripcionid/renovar", authenticateToken, authorizeRole([1]), suscripcionController.renovarSuscripcionAdmin);
+router.get("/admin/clientes", authenticateToken, authorizeRole([1]), suscripcionController.getClientesList);
+router.post("/admin/suscripciones/crear", authenticateToken, authorizeRole([1]), suscripcionController.crearSuscripcionAdmin);
+router.post("/admin/suscripciones/:suscripcionid/notificar-vencimiento", authenticateToken, authorizeRole([1]), suscripcionController.enviarNotificacionVencimiento);
+router.post("/admin/suscripciones/verificar-vencimientos", authenticateToken, authorizeRole([1]), suscripcionController.verificarYNotificarVencimientos);
 
 module.exports = router;
