@@ -1,8 +1,5 @@
 const db = require("../config/db");
 
-// ========== GESTIÓN DE USUARIOS ==========
-
-// Obtener todos los usuarios (admins y clientes)
 exports.getUsuarios = async (req, res) => {
   try {
     const { tipo, busqueda, activo } = req.query;
@@ -12,19 +9,18 @@ exports.getUsuarios = async (req, res) => {
     const params = [];
     
     if (tipo === 'admin') {
-      queryClientes += " WHERE 1=0"; // No mostrar clientes
+      queryClientes += " WHERE 1=0";
       if (activo !== undefined) {
         queryAdmins += " WHERE activo = ?";
         params.push(activo);
       }
     } else if (tipo === 'cliente') {
-      queryAdmins += " WHERE 1=0"; // No mostrar admins
+      queryAdmins += " WHERE 1=0";
       if (activo !== undefined) {
         queryClientes += " WHERE activo = ?";
         params.push(activo);
       }
     } else {
-      // Ambos tipos
       if (activo !== undefined) {
         queryAdmins += " WHERE activo = ?";
         queryClientes += " WHERE activo = ?";
@@ -60,7 +56,6 @@ exports.getUsuarios = async (req, res) => {
   }
 };
 
-// Obtener usuario por ID
 exports.getUsuarioById = async (req, res) => {
   try {
     const { id } = req.params;
@@ -83,7 +78,6 @@ exports.getUsuarioById = async (req, res) => {
     
     user = rows[0];
     
-    // Si es cliente, obtener información adicional
     if (tipo === 'cliente') {
       const [clienteInfo] = await db.execute(
         "SELECT * FROM clientes WHERE usuarioid = ?",
@@ -92,7 +86,6 @@ exports.getUsuarioById = async (req, res) => {
       user.cliente_info = clienteInfo[0] || null;
     }
     
-    // Obtener suscripciones del usuario
     const [suscripciones] = await db.execute(
       `SELECT s.*, ts.nombre as plan_nombre 
        FROM suscripciones_usuarios s
@@ -111,18 +104,15 @@ exports.getUsuarioById = async (req, res) => {
   }
 };
 
-// Actualizar rol de un usuario
 exports.updateUsuarioRol = async (req, res) => {
   try {
     const { id } = req.params;
     const { rolid, tipo = 'admin' } = req.body;
     
-    // Validar que no sea el propio admin cambiándose a sí mismo
     if (parseInt(id) === req.user.usuarioid && req.user.tipo === 'admin') {
       return res.status(400).json({ error: "No puedes cambiar tu propio rol" });
     }
     
-    // Validar rol existente
     const [roles] = await db.execute("SELECT rolid, nombre FROM roles WHERE rolid = ?", [rolid]);
     if (roles.length === 0) {
       return res.status(400).json({ error: "Rol no válido" });
@@ -139,7 +129,6 @@ exports.updateUsuarioRol = async (req, res) => {
       return res.status(404).json({ error: "Usuario no encontrado" });
     }
     
-    // Registrar en log de auditoría
     await db.execute(
       `INSERT INTO logs_auditoria (admin_id, accion, entidad, entidad_id, detalles, ip_address) 
        VALUES (?, ?, ?, ?, ?, ?)`,
@@ -156,13 +145,11 @@ exports.updateUsuarioRol = async (req, res) => {
   }
 };
 
-// Activar/desactivar usuario
 exports.updateUsuarioEstado = async (req, res) => {
   try {
     const { id } = req.params;
     const { activo, tipo = 'admin' } = req.body;
     
-    // Validar que no sea el propio admin desactivándose
     if (parseInt(id) === req.user.usuarioid && req.user.tipo === 'admin') {
       return res.status(400).json({ error: "No puedes desactivar tu propia cuenta" });
     }
@@ -193,13 +180,11 @@ exports.updateUsuarioEstado = async (req, res) => {
   }
 };
 
-// Eliminar usuario (soft delete)
 exports.deleteUsuario = async (req, res) => {
   try {
     const { id } = req.params;
     const { tipo = 'admin' } = req.body;
     
-    // Validar que no sea el propio admin eliminándose
     if (parseInt(id) === req.user.usuarioid && req.user.tipo === 'admin') {
       return res.status(400).json({ error: "No puedes eliminar tu propia cuenta" });
     }
@@ -228,9 +213,6 @@ exports.deleteUsuario = async (req, res) => {
   }
 };
 
-// ========== ESTADÍSTICAS GLOBALES ==========
-
-// Dashboard stats para admin
 exports.getGlobalStats = async (req, res) => {
   try {
     const [totalAdmins] = await db.execute("SELECT COUNT(*) as total FROM usuarios WHERE activo = 1");
@@ -242,9 +224,23 @@ exports.getGlobalStats = async (req, res) => {
       "SELECT COUNT(*) as total FROM suscripciones_usuarios WHERE estado = 'activa'"
     );
     
-    // Tarjetas por plan
+    const [tarjetasPopulares] = await db.execute(
+      `SELECT 
+         tc.tarjetaclienteid, 
+         tc.nombre_tarjeta, 
+         tc.visitas,
+         tc.slug,
+         COALESCE(u.nombre, uc.nombre) as usuario_nombre
+       FROM tarjetas_cliente tc
+       LEFT JOIN usuarios u ON tc.usuarioid = u.usuarioid
+       LEFT JOIN usuarios_clientes uc ON tc.usuarioid = uc.usuarioid
+       WHERE tc.activo = 1 AND tc.visibilidad = 'publico'
+       ORDER BY tc.visitas DESC
+       LIMIT 10`
+    );
+    
     const [tarjetasPorPlantilla] = await db.execute(
-      `SELECT p.nombre, COUNT(tc.tarjetaclienteid) as total 
+      `SELECT p.nombre as plantilla_nombre, COUNT(tc.tarjetaclienteid) as total 
        FROM plantillas_tarjetas p
        LEFT JOIN tarjetas_cliente tc ON p.plantillaid = tc.plantillaid AND tc.activo = 1
        WHERE p.activo = 1
@@ -253,7 +249,6 @@ exports.getGlobalStats = async (req, res) => {
        LIMIT 5`
     );
     
-    // Actividad reciente
     const [actividadReciente] = await db.execute(
       `SELECT l.*, 
               COALESCE(u.nombre, uc.nombre) as admin_nombre
@@ -276,7 +271,8 @@ exports.getGlobalStats = async (req, res) => {
         visitas_totales: totalVisitas[0].total || 0
       },
       suscripciones_activas: suscripcionesActivas[0].total,
-      tarjetas_populares: tarjetasPorPlantilla,
+      tarjetas_populares: tarjetasPopulares,
+      tarjetas_por_plantilla: tarjetasPorPlantilla,
       actividad_reciente: actividadReciente
     });
   } catch (error) {
@@ -285,7 +281,6 @@ exports.getGlobalStats = async (req, res) => {
   }
 };
 
-// Estadísticas de visitas
 exports.getEstadisticasVisitas = async (req, res) => {
   try {
     const { periodo = '30dias' } = req.query;
@@ -337,7 +332,6 @@ exports.getEstadisticasVisitas = async (req, res) => {
   }
 };
 
-// Estadísticas de tarjetas
 exports.getEstadisticasTarjetas = async (req, res) => {
   try {
     const [tarjetasPorCliente] = await db.execute(
@@ -375,8 +369,6 @@ exports.getEstadisticasTarjetas = async (req, res) => {
     return res.status(500).json({ error: "Error al obtener estadísticas de tarjetas" });
   }
 };
-
-// ========== GESTIÓN DE VARIABLES ==========
 
 exports.getVariablesAdmin = async (req, res) => {
   try {
@@ -460,7 +452,6 @@ exports.deleteVariable = async (req, res) => {
   try {
     const { id } = req.params;
     
-    // Verificar que no esté siendo usada
     const [enUso] = await db.execute(
       "SELECT COUNT(*) as total FROM plantillas_variables WHERE variableid = ?",
       [id]
@@ -494,8 +485,6 @@ exports.deleteVariable = async (req, res) => {
     return res.status(500).json({ error: "Error al eliminar variable" });
   }
 };
-
-// ========== GESTIÓN DE CATEGORÍAS ==========
 
 exports.getCategorias = async (req, res) => {
   try {
@@ -569,7 +558,6 @@ exports.deleteCategoria = async (req, res) => {
   try {
     const { id } = req.params;
     
-    // Verificar que no tenga plantillas asociadas
     const [plantillas] = await db.execute(
       "SELECT COUNT(*) as total FROM plantillas_tarjetas WHERE categoriaid = ? AND activo = 1",
       [id]
@@ -597,8 +585,6 @@ exports.deleteCategoria = async (req, res) => {
     return res.status(500).json({ error: "Error al eliminar categoría" });
   }
 };
-
-// ========== LOGS DE AUDITORÍA ==========
 
 exports.getLogs = async (req, res) => {
   try {
