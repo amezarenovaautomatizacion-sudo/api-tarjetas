@@ -3,6 +3,6 @@ const router = express.Router();
 const qrController = require("../controllers/qr.controller");
 const { authenticateToken } = require("../middleware/auth.middleware");
 
-router.post("/qr/generate", authenticateToken, qrController.generateCustomQR);
+router.post("/qr/generate", qrController.generateCustomQR);
 
 module.exports = router;
