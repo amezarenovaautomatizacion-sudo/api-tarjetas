@@ -1,6 +1,16 @@
 const db = require("../config/db");
 const { getMexicoISO } = require("../utils/date.utils");
-const { sendVencimientoEmail, sendNotificacionManualEmail } = require("../utils/emailSuscripcion.utils");
+
+let sendVencimientoEmail, sendNotificacionManualEmail;
+try {
+  const emailUtils = require("../utils/emailSuscripcion.utils");
+  sendVencimientoEmail = emailUtils.sendVencimientoEmail;
+  sendNotificacionManualEmail = emailUtils.sendNotificacionManualEmail;
+} catch (error) {
+  console.warn("Email utils no encontrado, las notificaciones por correo no estarán disponibles");
+  sendVencimientoEmail = async () => console.log("Email no enviado - utils no disponible");
+  sendNotificacionManualEmail = async () => console.log("Email no enviado - utils no disponible");
+}
 
 const getTableNames = (tipo) => {
   if (tipo === 'cliente') {
@@ -387,10 +397,12 @@ exports.getAllSuscripciones = async (req, res) => {
 
     let query = `
       SELECT s.*, ts.nombre as plan_nombre, ts.precio_centavos,
-             u.nombre as usuario_nombre, u.email as usuario_email
+             COALESCE(uc.nombre, u.nombre) as usuario_nombre,
+             COALESCE(uc.email, u.email) as usuario_email
       FROM suscripciones_usuarios s
       INNER JOIN tipos_suscripcion ts ON s.tiposuscripcionid = ts.tiposuscripcionid
-      INNER JOIN usuarios_clientes u ON s.usuarioid = u.usuarioid
+      LEFT JOIN usuarios_clientes uc ON s.usuarioid = uc.usuarioid AND s.tipo_usuario = 'cliente'
+      LEFT JOIN usuarios u ON s.usuarioid = u.usuarioid AND s.tipo_usuario = 'admin'
       WHERE 1=1
     `;
     const params = [];
@@ -571,10 +583,13 @@ exports.enviarNotificacionVencimiento = async (req, res) => {
     const { suscripcionid } = req.params;
 
     const [suscripcion] = await db.execute(
-      `SELECT s.*, ts.nombre as plan_nombre, u.email, u.nombre as usuario_nombre
+      `SELECT s.*, ts.nombre as plan_nombre, 
+              COALESCE(uc.email, u.email) as email,
+              COALESCE(uc.nombre, u.nombre) as usuario_nombre
        FROM suscripciones_usuarios s
        INNER JOIN tipos_suscripcion ts ON s.tiposuscripcionid = ts.tiposuscripcionid
-       INNER JOIN usuarios_clientes u ON s.usuarioid = u.usuarioid
+       LEFT JOIN usuarios_clientes uc ON s.usuarioid = uc.usuarioid AND s.tipo_usuario = 'cliente'
+       LEFT JOIN usuarios u ON s.usuarioid = u.usuarioid AND s.tipo_usuario = 'admin'
        WHERE s.suscripcionid = ?`,
       [suscripcionid]
     );
@@ -601,20 +616,22 @@ exports.enviarNotificacionVencimiento = async (req, res) => {
 exports.verificarYNotificarVencimientos = async (req, res) => {
   try {
     const hoy = new Date();
-    const manana = new Date();
-    manana.setDate(manana.getDate() + 1);
     const dentroDe7Dias = new Date();
     dentroDe7Dias.setDate(dentroDe7Dias.getDate() + 7);
 
     const [suscripciones] = await db.execute(
-      `SELECT s.*, ts.nombre as plan_nombre, u.email, u.nombre as usuario_nombre
+      `SELECT s.*, ts.nombre as plan_nombre,
+              COALESCE(uc.email, u.email) as email,
+              COALESCE(uc.nombre, u.nombre) as usuario_nombre
        FROM suscripciones_usuarios s
        INNER JOIN tipos_suscripcion ts ON s.tiposuscripcionid = ts.tiposuscripcionid
-       INNER JOIN usuarios_clientes u ON s.usuarioid = u.usuarioid
+       LEFT JOIN usuarios_clientes uc ON s.usuarioid = uc.usuarioid AND s.tipo_usuario = 'cliente'
+       LEFT JOIN usuarios u ON s.usuarioid = u.usuarioid AND s.tipo_usuario = 'admin'
        WHERE s.estado = 'activa' 
-         AND s.fecha_fin BETWEEN ? AND ?
-         AND s.ultimo_recordatorio IS NULL`,
-      [hoy.toISOString().split('T')[0], dentroDe7Dias.toISOString().split('T')[0]]
+         AND s.fecha_fin <= ?
+         AND s.fecha_fin >= ?
+         AND (s.ultimo_recordatorio IS NULL OR s.ultimo_recordatorio < DATE_SUB(NOW(), INTERVAL 1 DAY))`,
+      [dentroDe7Dias.toISOString().split('T')[0], hoy.toISOString().split('T')[0]]
     );
 
     const resultados = [];
@@ -629,6 +646,7 @@ exports.verificarYNotificarVencimientos = async (req, res) => {
       
       resultados.push({
         email: sub.email,
+        usuario: sub.usuario_nombre,
         dias_restantes: diasRestantes,
         enviado: true
       });
