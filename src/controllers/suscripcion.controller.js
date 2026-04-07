@@ -395,7 +395,7 @@ exports.getAllSuscripciones = async (req, res) => {
     const paginaNum = parseInt(pagina);
     const offset = (paginaNum - 1) * limiteNum;
 
-    // Consulta corregida - usando LEFT JOIN y manejando nulos correctamente
+    // Construir la consulta base
     let query = `
       SELECT 
         s.suscripcionid,
@@ -437,15 +437,18 @@ exports.getAllSuscripciones = async (req, res) => {
       params.push(tipo_usuario);
     }
 
+    // IMPORTANTE: Añadir ORDER BY antes de LIMIT
     query += " ORDER BY s.suscripcionid DESC LIMIT ? OFFSET ?";
     params.push(limiteNum, offset);
 
     console.log('[DEBUG] SQL Query:', query);
     console.log('[DEBUG] Params:', params);
+    console.log('[DEBUG] Params count:', params.length);
 
+    // Ejecutar la consulta principal
     const [suscripciones] = await db.execute(query, params);
 
-    // Query para el total
+    // Query para el total (sin LIMIT/OFFSET)
     let countQuery = "SELECT COUNT(*) as total FROM suscripciones_usuarios s WHERE 1=1";
     const countParams = [];
     
