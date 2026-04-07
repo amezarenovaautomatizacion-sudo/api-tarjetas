@@ -1,5 +1,6 @@
 const db = require("../config/db");
 const { getMexicoISO } = require("../utils/date.utils");
+const { sendVencimientoEmail, sendNotificacionManualEmail } = require("../utils/emailSuscripcion.utils");
 
 const getTableNames = (tipo) => {
   if (tipo === 'cliente') {
@@ -8,13 +9,11 @@ const getTableNames = (tipo) => {
   return { usuarios: 'usuarios' };
 };
 
-// Obtener todos los tipos de suscripción disponibles
 exports.getTiposSuscripcion = async (req, res) => {
   try {
     const [tipos] = await db.execute(
       "SELECT * FROM tipos_suscripcion WHERE activo = 1 ORDER BY orden, precio_centavos"
     );
-    
     return res.json({ tipos });
   } catch (error) {
     console.error("Error en getTiposSuscripcion:", error);
@@ -22,7 +21,6 @@ exports.getTiposSuscripcion = async (req, res) => {
   }
 };
 
-// Obtener suscripción actual del usuario
 exports.getMiSuscripcion = async (req, res) => {
   try {
     const usuarioid = req.user.usuarioid;
@@ -43,7 +41,6 @@ exports.getMiSuscripcion = async (req, res) => {
     );
 
     if (suscripciones.length === 0) {
-      // Buscar la última suscripción aunque esté vencida
       const [ultima] = await db.execute(
         `SELECT s.*, ts.nombre as plan_nombre, ts.max_tarjetas,
                 m.simbolo as moneda_simbolo
@@ -86,7 +83,6 @@ exports.getMiSuscripcion = async (req, res) => {
   }
 };
 
-// Crear/renovar suscripción (simula pago)
 exports.crearSuscripcion = async (req, res) => {
   try {
     const usuarioid = req.user.usuarioid;
@@ -97,7 +93,6 @@ exports.crearSuscripcion = async (req, res) => {
       return res.status(400).json({ error: "Se requiere el tipo de suscripción" });
     }
 
-    // Obtener el tipo de suscripción
     const [tipos] = await db.execute(
       "SELECT * FROM tipos_suscripcion WHERE tiposuscripcionid = ? AND activo = 1",
       [tiposuscripcionid]
@@ -113,7 +108,6 @@ exports.crearSuscripcion = async (req, res) => {
     fecha_fin.setDate(fecha_fin.getDate() + plan.duracion_dias);
     const fecha_fin_str = fecha_fin.toISOString().split('T')[0];
 
-    // Desactivar suscripciones activas anteriores
     await db.execute(
       `UPDATE suscripciones_usuarios 
        SET estado = 'cancelada', actualizado = NOW()
@@ -121,7 +115,6 @@ exports.crearSuscripcion = async (req, res) => {
       [usuarioid, tipo]
     );
 
-    // Crear nueva suscripción
     const [result] = await db.execute(
       `INSERT INTO suscripciones_usuarios 
        (usuarioid, tipo_usuario, tiposuscripcionid, fecha_inicio, fecha_fin, 
@@ -131,7 +124,6 @@ exports.crearSuscripcion = async (req, res) => {
        renovar_automatico ? 1 : 0, `pago_${Date.now()}`, `Suscripción ${plan.nombre} - Método: ${metodo_pago}`]
     );
 
-    // Registrar en historial
     await db.execute(
       `INSERT INTO historial_suscripciones 
        (suscripcionid, usuarioid, tipo_usuario, tiposuscripcionid, 
@@ -154,7 +146,6 @@ exports.crearSuscripcion = async (req, res) => {
   }
 };
 
-// Cancelar suscripción
 exports.cancelarSuscripcion = async (req, res) => {
   try {
     const usuarioid = req.user.usuarioid;
@@ -201,7 +192,6 @@ exports.cancelarSuscripcion = async (req, res) => {
   }
 };
 
-// Historial de suscripciones del usuario
 exports.getHistorialSuscripciones = async (req, res) => {
   try {
     const usuarioid = req.user.usuarioid;
@@ -244,13 +234,11 @@ exports.getHistorialSuscripciones = async (req, res) => {
   }
 };
 
-// Dashboard - Estadísticas del usuario
 exports.getDashboardStats = async (req, res) => {
   try {
     const usuarioid = req.user.usuarioid;
     const tipo = req.user.tipo || 'cliente';
 
-    // Obtener suscripción activa
     const [suscripcionActiva] = await db.execute(
       `SELECT s.*, ts.max_tarjetas, ts.max_plantillas_personalizadas, 
               ts.qr_dinamico, ts.analitica_avanzada, ts.soporte_prioritario,
@@ -262,7 +250,7 @@ exports.getDashboardStats = async (req, res) => {
       [usuarioid, tipo]
     );
 
-    let limiteTarjetas = 3; // Plan básico por defecto
+    let limiteTarjetas = 3;
     let planActual = null;
     let diasRestantes = 0;
 
@@ -280,7 +268,6 @@ exports.getDashboardStats = async (req, res) => {
       diasRestantes = Math.max(0, Math.ceil((new Date(sub.fecha_fin) - new Date()) / (1000 * 60 * 60 * 24)));
     }
 
-    // Contar tarjetas activas
     const [tarjetasCount] = await db.execute(
       `SELECT COUNT(*) as total FROM tarjetas_cliente 
        WHERE usuarioid = ? AND activo = 1`,
@@ -288,7 +275,6 @@ exports.getDashboardStats = async (req, res) => {
     );
     const totalTarjetas = tarjetasCount[0].total;
 
-    // Contar visitas totales a tarjetas públicas
     const [visitasCount] = await db.execute(
       `SELECT COALESCE(SUM(visitas), 0) as total FROM tarjetas_cliente 
        WHERE usuarioid = ? AND visibilidad = 'publico' AND activo = 1`,
@@ -296,7 +282,6 @@ exports.getDashboardStats = async (req, res) => {
     );
     const totalVisitas = visitasCount[0].total;
 
-    // Tarjetas más visitadas (top 5)
     const [topTarjetas] = await db.execute(
       `SELECT tarjetaclienteid, nombre_tarjeta, visitas, slug,
               (SELECT nombre FROM plantillas_tarjetas WHERE plantillaid = tc.plantillaid) as plantilla_nombre
@@ -306,7 +291,6 @@ exports.getDashboardStats = async (req, res) => {
       [usuarioid]
     );
 
-    // Actividad reciente (últimas 5 tarjetas creadas/modificadas)
     const [actividadReciente] = await db.execute(
       `SELECT tarjetaclienteid, nombre_tarjeta, creado, actualizado,
               (SELECT nombre FROM plantillas_tarjetas WHERE plantillaid = tc.plantillaid) as plantilla_nombre
@@ -316,8 +300,21 @@ exports.getDashboardStats = async (req, res) => {
       [usuarioid]
     );
 
-    // Verificar si puede crear más tarjetas
     const puedeCrearMas = totalTarjetas < limiteTarjetas || limiteTarjetas === 0;
+
+    const [pub] = await db.execute(
+      `SELECT COUNT(*) as total FROM tarjetas_cliente 
+       WHERE usuarioid = ? AND visibilidad = 'publico' AND activo = 1`,
+      [usuarioid]
+    );
+    const tarjetasPublicas = pub[0].total;
+
+    const [priv] = await db.execute(
+      `SELECT COUNT(*) as total FROM tarjetas_cliente 
+       WHERE usuarioid = ? AND visibilidad = 'privado' AND activo = 1`,
+      [usuarioid]
+    );
+    const tarjetasPrivadas = priv[0].total;
 
     return res.json({
       suscripcion: {
@@ -330,22 +327,8 @@ exports.getDashboardStats = async (req, res) => {
       estadisticas: {
         total_tarjetas: totalTarjetas,
         total_visitas: totalVisitas,
-        tarjetas_publicas: await (async () => {
-          const [pub] = await db.execute(
-            `SELECT COUNT(*) as total FROM tarjetas_cliente 
-             WHERE usuarioid = ? AND visibilidad = 'publico' AND activo = 1`,
-            [usuarioid]
-          );
-          return pub[0].total;
-        })(),
-        tarjetas_privadas: await (async () => {
-          const [priv] = await db.execute(
-            `SELECT COUNT(*) as total FROM tarjetas_cliente 
-             WHERE usuarioid = ? AND visibilidad = 'privado' AND activo = 1`,
-            [usuarioid]
-          );
-          return priv[0].total;
-        })()
+        tarjetas_publicas: tarjetasPublicas,
+        tarjetas_privadas: tarjetasPrivadas
       },
       top_tarjetas: topTarjetas,
       actividad_reciente: actividadReciente,
@@ -358,10 +341,8 @@ exports.getDashboardStats = async (req, res) => {
   }
 };
 
-// Verificar límites antes de crear tarjeta (middleware/helper)
 exports.verificarLimitesTarjetas = async (usuarioid, tipo = 'cliente') => {
   try {
-    // Obtener suscripción activa
     const [suscripcion] = await db.execute(
       `SELECT ts.max_tarjetas
        FROM suscripciones_usuarios s
@@ -371,12 +352,11 @@ exports.verificarLimitesTarjetas = async (usuarioid, tipo = 'cliente') => {
       [usuarioid, tipo]
     );
 
-    let limiteTarjetas = 3; // Plan básico por defecto
+    let limiteTarjetas = 3;
     if (suscripcion.length > 0) {
       limiteTarjetas = suscripcion[0].max_tarjetas === 0 ? 999999 : suscripcion[0].max_tarjetas;
     }
 
-    // Contar tarjetas activas
     const [tarjetasCount] = await db.execute(
       `SELECT COUNT(*) as total FROM tarjetas_cliente 
        WHERE usuarioid = ? AND activo = 1`,
@@ -397,7 +377,6 @@ exports.verificarLimitesTarjetas = async (usuarioid, tipo = 'cliente') => {
   }
 };
 
-// Obtener todas las suscripciones (solo admin)
 exports.getAllSuscripciones = async (req, res) => {
   try {
     const { estado, tipo_usuario, limite = 50, pagina = 1 } = req.query;
@@ -411,7 +390,7 @@ exports.getAllSuscripciones = async (req, res) => {
              u.nombre as usuario_nombre, u.email as usuario_email
       FROM suscripciones_usuarios s
       INNER JOIN tipos_suscripcion ts ON s.tiposuscripcionid = ts.tiposuscripcionid
-      INNER JOIN ${tipo_usuario === 'cliente' ? 'usuarios_clientes' : 'usuarios'} u ON s.usuarioid = u.usuarioid
+      INNER JOIN usuarios_clientes u ON s.usuarioid = u.usuarioid
       WHERE 1=1
     `;
     const params = [];
@@ -450,7 +429,6 @@ exports.getAllSuscripciones = async (req, res) => {
   }
 };
 
-// Renovar suscripción manualmente (admin)
 exports.renovarSuscripcionAdmin = async (req, res) => {
   try {
     const { suscripcionid } = req.params;
@@ -502,5 +480,167 @@ exports.renovarSuscripcionAdmin = async (req, res) => {
   } catch (error) {
     console.error("Error en renovarSuscripcionAdmin:", error);
     return res.status(500).json({ error: "Error al renovar suscripción" });
+  }
+};
+
+exports.getClientesList = async (req, res) => {
+  try {
+    const [clientes] = await db.execute(
+      "SELECT usuarioid, nombre, email FROM usuarios_clientes WHERE activo = 1 ORDER BY nombre"
+    );
+    return res.json({ clientes });
+  } catch (error) {
+    console.error("Error en getClientesList:", error);
+    return res.status(500).json({ error: "Error al obtener clientes" });
+  }
+};
+
+exports.crearSuscripcionAdmin = async (req, res) => {
+  try {
+    const { usuarioid, tiposuscripcionid, dias, renovar_automatico = false } = req.body;
+
+    if (!usuarioid || !tiposuscripcionid) {
+      return res.status(400).json({ error: "Faltan datos requeridos" });
+    }
+
+    const [plan] = await db.execute(
+      "SELECT * FROM tipos_suscripcion WHERE tiposuscripcionid = ? AND activo = 1",
+      [tiposuscripcionid]
+    );
+
+    if (plan.length === 0) {
+      return res.status(404).json({ error: "Plan no encontrado" });
+    }
+
+    const duracionDias = dias || plan[0].duracion_dias;
+    const fecha_inicio = getMexicoISO().split('T')[0];
+    const fecha_fin = new Date();
+    fecha_fin.setDate(fecha_fin.getDate() + duracionDias);
+    const fecha_fin_str = fecha_fin.toISOString().split('T')[0];
+
+    await db.execute(
+      `UPDATE suscripciones_usuarios 
+       SET estado = 'cancelada', actualizado = NOW()
+       WHERE usuarioid = ? AND tipo_usuario = 'cliente' AND estado = 'activa'`,
+      [usuarioid]
+    );
+
+    const [result] = await db.execute(
+      `INSERT INTO suscripciones_usuarios 
+       (usuarioid, tipo_usuario, tiposuscripcionid, fecha_inicio, fecha_fin, 
+        fecha_ultima_renovacion, estado, automatico_renovar, ultimo_pago_id, notas)
+       VALUES (?, 'cliente', ?, ?, ?, NOW(), 'activa', ?, ?, ?)`,
+      [usuarioid, tiposuscripcionid, fecha_inicio, fecha_fin_str, 
+       renovar_automatico ? 1 : 0, `admin_${Date.now()}`, `Suscripción creada por admin - ${plan[0].nombre}`]
+    );
+
+    await db.execute(
+      `INSERT INTO historial_suscripciones 
+       (suscripcionid, usuarioid, tipo_usuario, tiposuscripcionid, 
+        fecha_inicio, fecha_fin, motivo, estado_anterior, estado_nuevo)
+       VALUES (?, ?, 'cliente', ?, ?, ?, ?, ?, ?)`,
+      [result.insertId, usuarioid, tiposuscripcionid, 
+       fecha_inicio, fecha_fin_str, 'Creada por admin', 'none', 'activa']
+    );
+
+    const [cliente] = await db.execute(
+      "SELECT email, nombre FROM usuarios_clientes WHERE usuarioid = ?",
+      [usuarioid]
+    );
+
+    if (cliente.length > 0) {
+      await sendNotificacionManualEmail(cliente[0].email, cliente[0].nombre, plan[0].nombre, fecha_fin_str);
+    }
+
+    return res.status(201).json({
+      success: true,
+      message: "Suscripción creada exitosamente",
+      suscripcionid: result.insertId,
+      fecha_inicio,
+      fecha_fin: fecha_fin_str,
+      plan: plan[0].nombre
+    });
+  } catch (error) {
+    console.error("Error en crearSuscripcionAdmin:", error);
+    return res.status(500).json({ error: "Error al crear suscripción" });
+  }
+};
+
+exports.enviarNotificacionVencimiento = async (req, res) => {
+  try {
+    const { suscripcionid } = req.params;
+
+    const [suscripcion] = await db.execute(
+      `SELECT s.*, ts.nombre as plan_nombre, u.email, u.nombre as usuario_nombre
+       FROM suscripciones_usuarios s
+       INNER JOIN tipos_suscripcion ts ON s.tiposuscripcionid = ts.tiposuscripcionid
+       INNER JOIN usuarios_clientes u ON s.usuarioid = u.usuarioid
+       WHERE s.suscripcionid = ?`,
+      [suscripcionid]
+    );
+
+    if (suscripcion.length === 0) {
+      return res.status(404).json({ error: "Suscripción no encontrada" });
+    }
+
+    const data = suscripcion[0];
+    const diasRestantes = Math.max(0, Math.ceil((new Date(data.fecha_fin) - new Date()) / (1000 * 60 * 60 * 24)));
+
+    await sendVencimientoEmail(data.email, data.usuario_nombre, diasRestantes, data.fecha_fin, data.plan_nombre);
+
+    return res.json({
+      success: true,
+      message: "Notificación de vencimiento enviada exitosamente"
+    });
+  } catch (error) {
+    console.error("Error en enviarNotificacionVencimiento:", error);
+    return res.status(500).json({ error: "Error al enviar notificación" });
+  }
+};
+
+exports.verificarYNotificarVencimientos = async (req, res) => {
+  try {
+    const hoy = new Date();
+    const manana = new Date();
+    manana.setDate(manana.getDate() + 1);
+    const dentroDe7Dias = new Date();
+    dentroDe7Dias.setDate(dentroDe7Dias.getDate() + 7);
+
+    const [suscripciones] = await db.execute(
+      `SELECT s.*, ts.nombre as plan_nombre, u.email, u.nombre as usuario_nombre
+       FROM suscripciones_usuarios s
+       INNER JOIN tipos_suscripcion ts ON s.tiposuscripcionid = ts.tiposuscripcionid
+       INNER JOIN usuarios_clientes u ON s.usuarioid = u.usuarioid
+       WHERE s.estado = 'activa' 
+         AND s.fecha_fin BETWEEN ? AND ?
+         AND s.ultimo_recordatorio IS NULL`,
+      [hoy.toISOString().split('T')[0], dentroDe7Dias.toISOString().split('T')[0]]
+    );
+
+    const resultados = [];
+    for (const sub of suscripciones) {
+      const diasRestantes = Math.ceil((new Date(sub.fecha_fin) - hoy) / (1000 * 60 * 60 * 24));
+      await sendVencimientoEmail(sub.email, sub.usuario_nombre, diasRestantes, sub.fecha_fin, sub.plan_nombre);
+      
+      await db.execute(
+        `UPDATE suscripciones_usuarios SET ultimo_recordatorio = NOW() WHERE suscripcionid = ?`,
+        [sub.suscripcionid]
+      );
+      
+      resultados.push({
+        email: sub.email,
+        dias_restantes: diasRestantes,
+        enviado: true
+      });
+    }
+
+    return res.json({
+      success: true,
+      notificaciones_enviadas: resultados.length,
+      detalles: resultados
+    });
+  } catch (error) {
+    console.error("Error en verificarYNotificarVencimientos:", error);
+    return res.status(500).json({ error: "Error al verificar vencimientos" });
   }
 };
