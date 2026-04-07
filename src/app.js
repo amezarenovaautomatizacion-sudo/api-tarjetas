@@ -8,6 +8,7 @@ const tarjetaClienteRoutes = require("./routes/tarjetaCliente.routes");
 const qrRoutes = require("./routes/qr.routes");
 const twoFactorRoutes = require("./routes/twoFactor.routes");
 const suscripcionRoutes = require("./routes/suscripcion.routes");
+const adminRoutes = require("./routes/admin.routes");
 
 const app = express();
 
@@ -1578,6 +1579,7 @@ app.use("/api", tarjetaClienteRoutes);
 app.use("/api", qrRoutes);
 app.use("/api", twoFactorRoutes);
 app.use("/api", suscripcionRoutes);
+app.use("/api", adminRoutes);
 
 app.use((req, res) => {
   res.status(404).json({
