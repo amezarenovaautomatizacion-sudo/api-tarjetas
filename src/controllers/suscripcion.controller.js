@@ -395,22 +395,43 @@ exports.getAllSuscripciones = async (req, res) => {
     const paginaNum = parseInt(pagina);
     const offset = (paginaNum - 1) * limiteNum;
 
+    // Consulta corregida - usando LEFT JOIN y manejando nulos correctamente
     let query = `
-      SELECT s.*, ts.nombre as plan_nombre, ts.precio_centavos,
-             COALESCE(uc.nombre, u.nombre) as usuario_nombre,
-             COALESCE(uc.email, u.email) as usuario_email
+      SELECT 
+        s.suscripcionid,
+        s.usuarioid,
+        s.tipo_usuario,
+        s.tiposuscripcionid,
+        s.fecha_inicio,
+        s.fecha_fin,
+        s.fecha_ultima_renovacion,
+        s.estado,
+        s.automatico_renovar,
+        s.ultimo_pago_id,
+        s.notas,
+        s.creado,
+        s.actualizado,
+        s.recordatorio_enviado,
+        ts.nombre as plan_nombre,
+        ts.precio_centavos,
+        ts.duracion_dias,
+        ts.max_tarjetas,
+        COALESCE(uc.nombre, u.nombre, 'Usuario') as usuario_nombre,
+        COALESCE(uc.email, u.email, 'Sin email') as usuario_email
       FROM suscripciones_usuarios s
       INNER JOIN tipos_suscripcion ts ON s.tiposuscripcionid = ts.tiposuscripcionid
       LEFT JOIN usuarios_clientes uc ON s.usuarioid = uc.usuarioid AND s.tipo_usuario = 'cliente'
       LEFT JOIN usuarios u ON s.usuarioid = u.usuarioid AND s.tipo_usuario = 'admin'
       WHERE 1=1
     `;
+    
     const params = [];
 
     if (estado) {
       query += " AND s.estado = ?";
       params.push(estado);
     }
+    
     if (tipo_usuario) {
       query += " AND s.tipo_usuario = ?";
       params.push(tipo_usuario);
@@ -419,25 +440,46 @@ exports.getAllSuscripciones = async (req, res) => {
     query += " ORDER BY s.suscripcionid DESC LIMIT ? OFFSET ?";
     params.push(limiteNum, offset);
 
+    console.log('[DEBUG] SQL Query:', query);
+    console.log('[DEBUG] Params:', params);
+
     const [suscripciones] = await db.execute(query, params);
 
-    const [total] = await db.execute(
-      `SELECT COUNT(*) as total FROM suscripciones_usuarios`,
-      []
-    );
+    // Query para el total
+    let countQuery = "SELECT COUNT(*) as total FROM suscripciones_usuarios s WHERE 1=1";
+    const countParams = [];
+    
+    if (estado) {
+      countQuery += " AND s.estado = ?";
+      countParams.push(estado);
+    }
+    
+    if (tipo_usuario) {
+      countQuery += " AND s.tipo_usuario = ?";
+      countParams.push(tipo_usuario);
+    }
+
+    const [total] = await db.execute(countQuery, countParams);
 
     return res.json({
-      suscripciones,
+      suscripciones: suscripciones || [],
       paginacion: {
         pagina: paginaNum,
         limite: limiteNum,
-        total: total[0].total,
-        paginas: Math.ceil(total[0].total / limiteNum)
+        total: total[0]?.total || 0,
+        paginas: Math.ceil((total[0]?.total || 0) / limiteNum)
       }
     });
+    
   } catch (error) {
-    console.error("Error en getAllSuscripciones:", error);
-    return res.status(500).json({ error: "Error al obtener suscripciones" });
+    console.error("Error DETALLADO en getAllSuscripciones:", error);
+    console.error("Error message:", error.message);
+    console.error("Error stack:", error.stack);
+    return res.status(500).json({ 
+      error: "Error al obtener suscripciones",
+      detalle: error.message,
+      sql: error.sql
+    });
   }
 };
 
