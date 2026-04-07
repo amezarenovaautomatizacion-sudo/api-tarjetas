@@ -2,7 +2,6 @@ const db = require("../config/db");
 const { getMexicoISO } = require("../utils/date.utils");
 const slugify = require("slugify");
 
-// Validar que una plantilla contenga todas las variables requeridas
 const validarVariablesPlantilla = (htmlContent, variablesRequeridas) => {
   const variablesFaltantes = [];
   
@@ -19,7 +18,6 @@ const validarVariablesPlantilla = (htmlContent, variablesRequeridas) => {
   };
 };
 
-// Obtener todas las variables disponibles
 exports.getVariables = async (req, res) => {
   try {
     const [variables] = await db.execute(
@@ -37,7 +35,6 @@ exports.getVariables = async (req, res) => {
   }
 };
 
-// Crear nueva plantilla
 exports.createPlantilla = async (req, res) => {
   try {
     const {
@@ -50,7 +47,7 @@ exports.createPlantilla = async (req, res) => {
       usa_bootstrap,
       usa_bootstrap_icons,
       bootstrap_version,
-      variables_requeridas // Array de IDs de variables requeridas
+      variables_requeridas
     } = req.body;
 
     if (!nombre || !html_content) {
@@ -59,10 +56,8 @@ exports.createPlantilla = async (req, res) => {
       });
     }
 
-    // Generar slug automático
     const slug = slugify(nombre, { lower: true, strict: true });
     
-    // Verificar slug único
     const [existing] = await db.execute(
       "SELECT plantillaid FROM plantillas_tarjetas WHERE slug = ?",
       [slug]
@@ -74,9 +69,8 @@ exports.createPlantilla = async (req, res) => {
       });
     }
 
-    // Obtener variables requeridas si se especificaron
     let variablesArray = [];
-    if (variables_requeridas && Array.isArray(variables_requeridas)) {
+    if (variables_requeridas && Array.isArray(variables_requeridas) && variables_requeridas.length > 0) {
       const placeholders = variables_requeridas.map(() => '?').join(',');
       const [variables] = await db.execute(
         `SELECT * FROM variables_plantilla WHERE variableid IN (${placeholders}) AND activo = 1`,
@@ -85,16 +79,16 @@ exports.createPlantilla = async (req, res) => {
       variablesArray = variables;
     }
 
-    // Validar que el HTML contenga las variables requeridas
-    const validacion = validarVariablesPlantilla(html_content, variablesArray);
-    if (!validacion.valida) {
-      return res.status(400).json({
-        error: "La plantilla no contiene todas las variables requeridas",
-        variables_faltantes: validacion.faltantes
-      });
+    if (variablesArray.length > 0) {
+      const validacion = validarVariablesPlantilla(html_content, variablesArray);
+      if (!validacion.valida) {
+        return res.status(400).json({
+          error: "La plantilla no contiene todas las variables requeridas",
+          variables_faltantes: validacion.faltantes
+        });
+      }
     }
 
-    // Insertar plantilla
     const [result] = await db.execute(
       `INSERT INTO plantillas_tarjetas 
        (nombre, slug, descripcion, html_content, css_content, preview_image, 
@@ -113,7 +107,6 @@ exports.createPlantilla = async (req, res) => {
 
     const plantillaid = result.insertId;
 
-    // Asociar variables requeridas
     if (variablesArray.length > 0) {
       const values = variablesArray.map(v => [plantillaid, v.variableid, 1]);
       await db.query(
@@ -136,7 +129,6 @@ exports.createPlantilla = async (req, res) => {
   }
 };
 
-// Obtener todas las plantillas (público)
 exports.getPlantillas = async (req, res) => {
   try {
     const { categoriaid, activo = 1 } = req.query;
@@ -171,7 +163,6 @@ exports.getPlantillas = async (req, res) => {
   }
 };
 
-// Obtener plantilla por ID o slug
 exports.getPlantillaById = async (req, res) => {
   try {
     const { id } = req.params;
@@ -194,7 +185,6 @@ exports.getPlantillaById = async (req, res) => {
 
     const plantilla = plantillas[0];
 
-    // Obtener variables requeridas
     const [variables] = await db.execute(
       `SELECT v.*, pv.es_requerida 
        FROM variables_plantilla v
@@ -206,7 +196,6 @@ exports.getPlantillaById = async (req, res) => {
 
     plantilla.variables_requeridas = variables;
 
-    // Incrementar visitas
     await db.execute(
       "UPDATE plantillas_tarjetas SET visitas = visitas + 1 WHERE plantillaid = ?",
       [plantilla.plantillaid]
@@ -224,10 +213,10 @@ exports.getPlantillaById = async (req, res) => {
   }
 };
 
-// Actualizar plantilla
 exports.updatePlantilla = async (req, res) => {
   try {
     const { id } = req.params;
+    
     const {
       nombre,
       descripcion,
@@ -242,7 +231,6 @@ exports.updatePlantilla = async (req, res) => {
       variables_requeridas
     } = req.body;
 
-    // Verificar que la plantilla existe
     const [existing] = await db.execute(
       "SELECT * FROM plantillas_tarjetas WHERE plantillaid = ?",
       [id]
@@ -258,7 +246,6 @@ exports.updatePlantilla = async (req, res) => {
     if (nombre && nombre !== existing[0].nombre) {
       newSlug = slugify(nombre, { lower: true, strict: true });
       
-      // Verificar slug único
       const [slugCheck] = await db.execute(
         "SELECT plantillaid FROM plantillas_tarjetas WHERE slug = ? AND plantillaid != ?",
         [newSlug, id]
@@ -271,8 +258,7 @@ exports.updatePlantilla = async (req, res) => {
       }
     }
 
-    // Validar variables si se actualiza el HTML
-    if (html_content && variables_requeridas && Array.isArray(variables_requeridas)) {
+    if (html_content && variables_requeridas && Array.isArray(variables_requeridas) && variables_requeridas.length > 0) {
       const placeholders = variables_requeridas.map(() => '?').join(',');
       const [variables] = await db.execute(
         `SELECT * FROM variables_plantilla WHERE variableid IN (${placeholders}) AND activo = 1`,
@@ -288,41 +274,70 @@ exports.updatePlantilla = async (req, res) => {
       }
     }
 
-    // Actualizar plantilla
-    await db.execute(
-      `UPDATE plantillas_tarjetas SET
-        nombre = COALESCE(?, nombre),
-        slug = COALESCE(?, slug),
-        descripcion = COALESCE(?, descripcion),
-        html_content = COALESCE(?, html_content),
-        css_content = COALESCE(?, css_content),
-        preview_image = COALESCE(?, preview_image),
-        categoriaid = COALESCE(?, categoriaid),
-        usa_bootstrap = COALESCE(?, usa_bootstrap),
-        usa_bootstrap_icons = COALESCE(?, usa_bootstrap_icons),
-        bootstrap_version = COALESCE(?, bootstrap_version),
-        activo = COALESCE(?, activo),
-        actualizado = NOW()
-      WHERE plantillaid = ?`,
-      [
-        nombre, newSlug !== existing[0].slug ? newSlug : null,
-        descripcion, html_content, css_content, preview_image,
-        categoriaid, usa_bootstrap, usa_bootstrap_icons, bootstrap_version,
-        activo, id
-      ]
-    );
+    const updates = [];
+    const values = [];
 
-    // Actualizar variables requeridas
+    if (nombre !== undefined) {
+      updates.push("nombre = ?");
+      values.push(nombre);
+    }
+    if (newSlug !== existing[0].slug) {
+      updates.push("slug = ?");
+      values.push(newSlug);
+    }
+    if (descripcion !== undefined) {
+      updates.push("descripcion = ?");
+      values.push(descripcion);
+    }
+    if (html_content !== undefined) {
+      updates.push("html_content = ?");
+      values.push(html_content);
+    }
+    if (css_content !== undefined) {
+      updates.push("css_content = ?");
+      values.push(css_content);
+    }
+    if (preview_image !== undefined) {
+      updates.push("preview_image = ?");
+      values.push(preview_image);
+    }
+    if (categoriaid !== undefined) {
+      updates.push("categoriaid = ?");
+      values.push(categoriaid === '' ? null : categoriaid);
+    }
+    if (usa_bootstrap !== undefined) {
+      updates.push("usa_bootstrap = ?");
+      values.push(usa_bootstrap);
+    }
+    if (usa_bootstrap_icons !== undefined) {
+      updates.push("usa_bootstrap_icons = ?");
+      values.push(usa_bootstrap_icons);
+    }
+    if (bootstrap_version !== undefined) {
+      updates.push("bootstrap_version = ?");
+      values.push(bootstrap_version);
+    }
+    if (activo !== undefined) {
+      updates.push("activo = ?");
+      values.push(activo);
+    }
+
+    if (updates.length > 0) {
+      updates.push("actualizado = NOW()");
+      const query = `UPDATE plantillas_tarjetas SET ${updates.join(', ')} WHERE plantillaid = ?`;
+      values.push(id);
+      
+      await db.execute(query, values);
+    }
+
     if (variables_requeridas && Array.isArray(variables_requeridas)) {
-      // Eliminar asociaciones actuales
       await db.execute(
         "DELETE FROM plantillas_variables WHERE plantillaid = ?",
         [id]
       );
 
-      // Insertar nuevas asociaciones
       if (variables_requeridas.length > 0) {
-        const values = variables_requeridas.map(v => [id, v, 1]);
+        const values = variables_requeridas.map(v => [parseInt(id), parseInt(v), 1]);
         await db.query(
           "INSERT INTO plantillas_variables (plantillaid, variableid, es_requerida) VALUES ?",
           [values]
@@ -342,7 +357,6 @@ exports.updatePlantilla = async (req, res) => {
   }
 };
 
-// Eliminar plantilla (soft delete)
 exports.deletePlantilla = async (req, res) => {
   try {
     const { id } = req.params;
@@ -370,7 +384,6 @@ exports.deletePlantilla = async (req, res) => {
   }
 };
 
-// Obtener preview de plantilla con variables reemplazadas
 exports.previewPlantilla = async (req, res) => {
   try {
     const { id } = req.params;
@@ -390,7 +403,6 @@ exports.previewPlantilla = async (req, res) => {
     const plantilla = plantillas[0];
     let htmlPreview = plantilla.html_content;
 
-    // Obtener variables requeridas
     const [variables] = await db.execute(
       `SELECT v.* FROM variables_plantilla v
        INNER JOIN plantillas_variables pv ON v.variableid = pv.variableid
@@ -398,7 +410,6 @@ exports.previewPlantilla = async (req, res) => {
       [id]
     );
 
-    // Reemplazar variables en el HTML
     variables.forEach(variable => {
       const patron = new RegExp(`\\$_${variable.nombre}_\\$`, 'g');
       const valor = datos && datos[variable.nombre] ? datos[variable.nombre] : `[${variable.etiqueta}]`;
