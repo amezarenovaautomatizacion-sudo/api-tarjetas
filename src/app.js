@@ -11,7 +11,6 @@ const suscripcionRoutes = require("./routes/suscripcion.routes");
 const adminRoutes = require("./routes/admin.routes");
 
 const path = require('path');
-const express = require('express');
 
 const app = express();
 
