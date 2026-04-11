@@ -22,7 +22,7 @@ module.exports = {
   urls: {
     frontend: process.env.FRONTEND_URL || "https://tapcards.renova-automatizacion.com",
     api: process.env.API_URL || "https://api-tarjetas.vercel.app",
-    logoUrl: process.env.LOGO_URL || "https://api-tarjetas.vercel.app/public/images/icon-512x512.png",
+    logoUrl: process.env.LOGO_URL || "https://api-tarjetas.vercel.app/images/icon-512x512.png",
     whatsapp: "https://wa.me/5213339205098"
   },
   
