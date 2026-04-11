@@ -10,6 +10,9 @@ const twoFactorRoutes = require("./routes/twoFactor.routes");
 const suscripcionRoutes = require("./routes/suscripcion.routes");
 const adminRoutes = require("./routes/admin.routes");
 
+const path = require('path');
+const express = require('express');
+
 const app = express();
 
 const corsOptions = {
@@ -1580,6 +1583,8 @@ app.use("/api", qrRoutes);
 app.use("/api", twoFactorRoutes);
 app.use("/api", suscripcionRoutes);
 app.use("/api", adminRoutes);
+
+app.use('/public', express.static(path.join(__dirname, 'public')));
 
 app.use((req, res) => {
   res.status(404).json({
