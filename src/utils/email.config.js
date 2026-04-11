@@ -1,5 +1,3 @@
-const path = require("path");
-
 module.exports = {
   colors: {
     primary: "#0DB8D3",
