@@ -353,7 +353,6 @@ exports.getDashboardStats = async (req, res) => {
 
 exports.verificarLimitesTarjetas = async (usuarioid, tipo = 'cliente') => {
   try {
-    // ✅ CORREGIDO: Asegurar que tipo sea string válido
     const tipoUsuario = tipo || 'cliente';
     
     const [suscripcion] = await db.execute(
@@ -362,7 +361,7 @@ exports.verificarLimitesTarjetas = async (usuarioid, tipo = 'cliente') => {
        INNER JOIN tipos_suscripcion ts ON s.tiposuscripcionid = ts.tiposuscripcionid
        WHERE s.usuarioid = ? AND s.tipo_usuario = ? AND s.estado = 'activa'
        ORDER BY s.suscripcionid DESC LIMIT 1`,
-      [usuarioid, tipoUsuario]  // ✅ Ambos parámetros explícitos
+      [usuarioid, tipoUsuario]
     );
 
     let limiteTarjetas = 3;

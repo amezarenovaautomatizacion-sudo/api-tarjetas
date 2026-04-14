@@ -2,6 +2,7 @@ const db = require("../config/db");
 const slugify = require("slugify");
 const { getMexicoISO } = require("../utils/date.utils");
 const suscripcionController = require("./suscripcion.controller");
+const { validateImageVariables } = require("../utils/image.utils");
 
 const renderPlantillaConDatos = (htmlContent, datos) => {
   let htmlRenderizado = htmlContent;
@@ -18,7 +19,6 @@ exports.createTarjeta = async (req, res) => {
     const tipo = req.user.tipo || 'cliente';
     const { plantillaid, nombre_tarjeta, datos, visibilidad = 'privado' } = req.body;
 
-    // VERIFICAR LÍMITES DE SUSCRIPCIÓN
     const limites = await suscripcionController.verificarLimitesTarjetas(usuarioid, tipo);
     
     if (!limites.puede_crear) {
@@ -34,7 +34,6 @@ exports.createTarjeta = async (req, res) => {
       return res.status(400).json({ error: "Faltan campos requeridos: plantillaid, nombre_tarjeta, datos" });
     }
 
-    // Resto del código original...
     const plantillaIdNum = parseInt(plantillaid);
     if (isNaN(plantillaIdNum)) {
       return res.status(400).json({ error: "plantillaid debe ser un número válido" });
@@ -61,6 +60,14 @@ exports.createTarjeta = async (req, res) => {
       datosCliente = typeof datos === 'string' ? JSON.parse(datos) : datos;
     } catch (e) {
       return res.status(400).json({ error: "El campo datos debe ser un JSON válido" });
+    }
+
+    const imageValidation = validateImageVariables(datosCliente);
+    if (!imageValidation.valid) {
+      return res.status(400).json({
+        error: "Error en imágenes",
+        detalles: imageValidation.errors
+      });
     }
 
     const nombresVariablesRequeridas = variablesRequeridas.map(v => v.nombre);
@@ -114,10 +121,7 @@ exports.getMisTarjetas = async (req, res) => {
     
     const limiteNum = parseInt(limite) || 10;
     const paginaNum = parseInt(pagina) || 1;
-    
-    console.log("Parámetros:", { plantillaid, visibilidad, busqueda, orden, direccion, limite: limiteNum, pagina: paginaNum });
 
-    // Construir parámetros para el conteo
     const countParams = [];
     let countQuery = "SELECT COUNT(*) as total FROM tarjetas_cliente WHERE usuarioid = ? AND activo = 1";
     countParams.push(usuarioid);
@@ -140,13 +144,9 @@ exports.getMisTarjetas = async (req, res) => {
       countParams.push(`%${busqueda}%`, `%${busqueda}%`);
     }
     
-    console.log("Count Query:", countQuery);
-    console.log("Count Params:", countParams);
-    
     const [countResult] = await db.execute(countQuery, countParams);
     const totalCount = countResult[0].total;
 
-    // Construir query principal
     let query = `
       SELECT 
         tc.tarjetaclienteid, 
@@ -193,13 +193,8 @@ exports.getMisTarjetas = async (req, res) => {
     
     query += ` ORDER BY tc.${campoOrden} ${direccionOrden} LIMIT ${limiteNum} OFFSET ${offset}`;
 
-    console.log("Query final:", query);
-    console.log("Params para WHERE:", params);
-
     const [tarjetas] = await db.execute(query, params);
-    console.log("Tarjetas encontradas:", tarjetas.length);
 
-    // Transformar los datos para incluir visitas_visibles según visibilidad
     const tarjetasConVisibilidad = tarjetas.map(tarjeta => ({
       ...tarjeta,
       visitas_visibles: tarjeta.visibilidad === 'publico' ? (tarjeta.visitas || 0) : 0
@@ -217,7 +212,6 @@ exports.getMisTarjetas = async (req, res) => {
 
   } catch (error) {
     console.error("ERROR DETALLADO en getMisTarjetas:", error);
-    console.error("Stack trace:", error.stack);
     return res.status(500).json({ 
       error: "Error al obtener tarjetas",
       detalle: error.message
@@ -298,7 +292,6 @@ exports.getTarjetaPublica = async (req, res) => {
     
     console.log("Buscando tarjeta pública con slug:", slug);
 
-    // Primero, verificar si la tarjeta existe sin el JOIN para depurar
     const [tarjetaBasica] = await db.execute(
       "SELECT * FROM tarjetas_cliente WHERE slug = ? AND visibilidad = 'publico' AND activo = 1",
       [slug]
@@ -307,14 +300,12 @@ exports.getTarjetaPublica = async (req, res) => {
     console.log("Tarjeta básica encontrada:", tarjetaBasica);
 
     if (tarjetaBasica.length === 0) {
-      console.log("No se encontró la tarjeta con slug:", slug);
       return res.status(404).json({ 
         error: "Tarjeta no encontrada",
         detalles: "Verifica que el slug sea correcto y que la tarjeta sea pública"
       });
     }
 
-    // Ahora hacer la consulta completa con el JOIN
     const [tarjetas] = await db.execute(
       `SELECT 
         tc.*, 
@@ -330,8 +321,6 @@ exports.getTarjetaPublica = async (req, res) => {
       [slug]
     );
 
-    console.log("Tarjetas con JOIN:", tarjetas);
-
     if (tarjetas.length === 0) {
       return res.status(404).json({ error: "Tarjeta no encontrada o no es pública" });
     }
@@ -341,15 +330,12 @@ exports.getTarjetaPublica = async (req, res) => {
     
     try {
       datosCliente = JSON.parse(tarjeta.datos);
-      console.log("Datos parseados:", datosCliente);
     } catch (e) {
       console.error("Error parseando datos de tarjeta:", e);
     }
 
     const htmlRenderizado = renderPlantillaConDatos(tarjeta.html_content, datosCliente);
-    console.log("HTML renderizado (primeros 100 chars):", htmlRenderizado.substring(0, 100));
 
-    // Incrementar visitas - AHORA SÍ FUNCIONA PORQUE LA COLUMNA EXISTE
     await db.execute(
       "UPDATE tarjetas_cliente SET visitas = IFNULL(visitas, 0) + 1 WHERE tarjetaclienteid = ?",
       [tarjeta.tarjetaclienteid]
@@ -360,7 +346,7 @@ exports.getTarjetaPublica = async (req, res) => {
       nombre_tarjeta: tarjeta.nombre_tarjeta,
       plantilla_nombre: tarjeta.plantilla_nombre,
       slug: tarjeta.slug,
-      visitas: tarjeta.visitas + 1, // Incluimos el contador actualizado
+      visitas: tarjeta.visitas + 1,
       renderizado: {
         html: htmlRenderizado,
         css: tarjeta.css_content,
@@ -374,11 +360,9 @@ exports.getTarjetaPublica = async (req, res) => {
 
   } catch (error) {
     console.error("Error DETALLADO en getTarjetaPublica:", error);
-    console.error("Stack trace:", error.stack);
     return res.status(500).json({ 
       error: "Error al obtener la tarjeta pública",
-      detalle: error.message,
-      stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
+      detalle: error.message
     });
   }
 };
@@ -407,6 +391,15 @@ exports.updateTarjeta = async (req, res) => {
     if (datos) {
       try {
         const datosObj = typeof datos === 'string' ? JSON.parse(datos) : datos;
+        
+        const imageValidation = validateImageVariables(datosObj);
+        if (!imageValidation.valid) {
+          return res.status(400).json({
+            error: "Error en imágenes",
+            detalles: imageValidation.errors
+          });
+        }
+        
         datosJSON = JSON.stringify(datosObj);
       } catch (e) {
         return res.status(400).json({ error: "El campo datos debe ser un JSON válido" });
